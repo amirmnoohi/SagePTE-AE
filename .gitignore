@@ -20,6 +20,14 @@ Results/
 build/
 *.o
 *.a
+# ...but drsyms links against prebuilt libelftc archives that DynamoRIO ships
+# in-tree rather than building; without them the tracer build dies at
+# ext/drsyms with "No rule to make target .../libdwarf.a". Only the x86-64 set
+# is kept: this artifact builds 64-bit Linux only, and run_arm.sh selects ARM
+# cache parameters for the simulator, not an ARM build. Widen these two lines
+# to libelftc*/lib*/ if a cross-arch build is ever needed.
+!Tracer/ext/drsyms/libelftc/lib64/*.a
+!Simulator/ext/drsyms/libelftc/lib64/*.a
 *.so
 *.so.*
 *.ko
