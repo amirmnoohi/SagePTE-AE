@@ -12,16 +12,9 @@
 Data/
 
 # --- results ------------------------------------------------------------------
-# Raw simulator logs run to hundreds of megabytes; the parsed analyses are a few
-# kilobytes and are the part worth keeping, so they are re-included.
-#
-# Directories must stay un-excluded at every level: git will not re-include a
-# file whose parent directory is itself excluded.
-Results/*
-!Results/*/
-Results/*/*
-!Results/*/analysis_*.txt
-!Results/*/expected_analysis.txt
+# Everything under Results/ is produced by a run — logs run to hundreds of
+# megabytes and the analyses are regenerated with the workload.
+Results/
 
 # --- build output -------------------------------------------------------------
 build/

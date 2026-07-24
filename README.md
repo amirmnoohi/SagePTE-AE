@@ -30,17 +30,9 @@ tools here.
 
 ## The pipeline
 
-```
-  ┌──────────────┐   ┌───────────────────────┐   ┌────────────────────┐   ┌──────────────┐
-  │  Workloads/  │──▶│        Tracer/        │──▶│    PageTables/     │──▶│  Simulator/  │
-  │              │   │                       │   │                    │   │              │
-  │  benchmarks  │   │  run.sh               │   │  Guest/run.sh      │   │ run_arm.sh   │
-  │  + defs      │   │  convert_trace.sh     │   │  Host/run.sh       │   │ run_x86.sh   │
-  └──────────────┘   └───────────────────────┘   └────────────────────┘   └──────────────┘
-                          memory trace              pt_dump.guest            page-walk
-                                                    pt_dump.host              latency
-                                                                            per design
-```
+<p align="center">
+  <img src="docs/pipeline.svg" alt="SagePTE artifact pipeline: stages 1 and 2 run in the guest VM, stage 3 on the KVM host, and the simulator consumes all three inputs" width="100%">
+</p>
 
 The simulator needs **three** inputs: the memory trace, the guest page table
 (GVA→GPA) and the host page table (GPA→HPA). Each stage of the pipeline
@@ -66,7 +58,7 @@ cd Simulator
 ./install.sh                      # builds the simulator
 ./run_x86.sh example              # ~1 min smoke test
 ./run_arm.sh ../Data/redis        # the paper's configuration
-cat ../Results/redis/analysis_arm.txt
+cat ../Results/redis/analysis_arm.txt   # written by the run
 ```
 
 The smoke test is self-contained and needs no dataset: it ships with a small
@@ -115,7 +107,6 @@ cd Simulator && ./run_arm.sh ../Data/debug
 | `Simulator/` | DynamoRIO fork with a modified `drcachesim` that replays every TLB miss as a full 2D walk. See `Simulator/README.md`. |
 | `Workloads/` | benchmarks (a fork of `mitosis-project/vmitosis-workloads`) and one declarative definition file per workload |
 | `Lib/ui.sh` | shared terminal presentation layer used by all the scripts |
-| `Results/` | reference analyses to compare your own runs against |
 
 ### Adding a workload
 
