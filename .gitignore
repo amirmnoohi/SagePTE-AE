@@ -16,6 +16,9 @@ Data/
 # megabytes and the analyses are regenerated with the workload.
 Results/
 
+# Per-component build logs written by build.sh.
+Logs/
+
 # --- build output -------------------------------------------------------------
 build/
 *.o

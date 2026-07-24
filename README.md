@@ -49,6 +49,22 @@ produces one of them, and every component's entry point is called `run.sh`.
 
 ## Quick start
 
+### Build everything
+
+One command installs the toolchain and compiles the tracer, the simulator, the
+benchmarks and both page-table modules, in that order:
+
+```bash
+./build.sh                        # everything
+./build.sh --only simulator       # enough to replay a published dataset
+```
+
+Anything that cannot be built on the current machine is reported and skipped
+rather than failing the run — the kernel modules need matching headers, and the
+host module needs Linux ≥ 6.1. Each step writes a log to `Logs/build/`, and a
+step that fails for a recognised reason (a missing package or header, a stale
+CMake cache) is repaired and retried automatically.
+
 ### Simulate an existing dataset
 
 With a published dataset unpacked into `Data/`, this is the whole reproduction.
@@ -132,7 +148,9 @@ arguments and readiness signal, and it is immediately runnable as
 | Host page tables | **Linux ≥ 6.1** on the KVM host — the module uses the maple-tree VMA iterators (`VMA_ITERATOR`, `for_each_vma`) |
 | Disk | traces are large: ~19 GB raw per workload, ~9× that once decoded |
 
-`./install_deps.sh` installs the toolchain on Ubuntu.
+`./build.sh` installs the toolchain on Ubuntu and then builds everything;
+`./build.sh --only deps` stops after the toolchain. (`install_deps.sh` still
+works and now forwards to it.)
 
 > **Note on AVX-512.** The bundled DynamoRIO (7.0.0) predates AVX-512 and
 > crashes at startup on machines that expose it: the kernel writes a 2440-byte
