@@ -42,9 +42,19 @@ PageTables/Host/host_pt_augmentor
 
 # --- run-time scratch ---------------------------------------------------------
 *.log
+# ...but not the module table of the smoke-test trace: a raw drmemtrace
+# directory cannot be replayed without the modules.log that pairs with its .raw.
+!Simulator/example/**/modules.log
 Tracer/enabler.txt
+
+# Core dumps. The trailing slashes below matter: a bare `core` matches a path
+# component of that name at *any* depth, which silently swallows DynamoRIO's
+# core/ source tree in both Tracer/ and Simulator/. Re-including them as
+# directories keeps the dumps (which are plain files) ignored.
 core
 core.*
+!Tracer/core/
+!Simulator/core/
 
 # --- editor / OS --------------------------------------------------------------
 *.swp
