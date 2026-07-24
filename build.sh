@@ -108,7 +108,6 @@ declare -A DETAIL=()          # component -> one-line explanation
 CURRENT_COMPONENT=""
 CHILD_PID=""
 RUN_START=0
-KERNEL_CC=""          # "CC=gcc-N" for the module builds; see kernel_cc()
 
 # ==============================================================================
 #  Package sets — merged from the former install_deps.sh
@@ -236,32 +235,6 @@ list_components() {
 #######################################
 have() { command -v "$1" > /dev/null 2>&1; }
 
-#######################################
-# The compiler the running kernel was built with, expressed as a make override,
-# but only when it differs from the default and is actually installed.
-#
-# kbuild warns when a module is compiled by a different gcc than the kernel
-# was, and the two rarely agree here: the toolchain step registers gcc-7 as the
-# default alternative because that is what DynamoRIO needs, while distribution
-# kernels are built with something much newer. The DynamoRIO builds keep gcc-7;
-# only the two kernel modules are steered back to the kernel's own compiler.
-#
-# Note that kbuild's warning compares the two version strings verbatim, so it
-# still appears even once the versions agree: "gcc-9 (Ubuntu 9.4.0…) 9.4.0" is
-# not textually "gcc (Ubuntu 9.4.0…) 9.4.0". Read the version, not the warning.
-# Outputs:
-#   "CC=gcc-N" on stdout, or nothing when the default is already correct.
-#######################################
-kernel_cc() {
-  local want have_major
-  want="$(grep -oE 'gcc \([^)]*\) [0-9]+' /proc/version 2> /dev/null |
-    grep -oE '[0-9]+$' | head -1)"
-  [[ -n "${want}" ]] || return 0
-  have "gcc-${want}" || return 0
-  have_major="$(gcc -dumpversion 2> /dev/null | cut -d. -f1)"
-  [[ "${have_major}" == "${want}" ]] && return 0
-  printf 'CC=gcc-%s' "${want}"
-}
 
 #######################################
 # Decide whether a component should be built, honouring --only and --skip.
@@ -563,10 +536,8 @@ build_workloads() {
 }
 
 build_guest_pt() {
-  # KERNEL_CC is a make command-line override, so it reaches kbuild's own
-  # sub-make too. Unquoted on purpose: empty means "use the default".
   # shellcheck disable=SC2086
-  make -C "${REPO_ROOT}/PageTables/Guest" ${RETRY_MAKE_FLAGS:-} ${KERNEL_CC:-}
+  make -C "${REPO_ROOT}/PageTables/Guest" ${RETRY_MAKE_FLAGS:-}
 }
 
 build_host_pt() {
@@ -577,9 +548,8 @@ build_host_pt() {
 }
 
 build_host_pt_module() {
-  # The augmentor uses AUG_CC, so overriding CC here reaches kbuild only.
   # shellcheck disable=SC2086
-  make -C "${REPO_ROOT}/PageTables/Host" ${RETRY_MAKE_FLAGS:-} ${KERNEL_CC:-} module
+  make -C "${REPO_ROOT}/PageTables/Host" ${RETRY_MAKE_FLAGS:-} module
 }
 
 #######################################
@@ -660,12 +630,6 @@ step_preflight() {
     ui::field "compiler" "$(gcc --version | head -1)"
   else
     ui::field "compiler" "${C_YELLOW}none yet${C_RESET}"
-  fi
-
-  # Steer only the kernel modules at the kernel's own compiler; see kernel_cc.
-  KERNEL_CC="$(kernel_cc)"
-  if [[ -n "${KERNEL_CC}" ]]; then
-    ui::field "kernel cc" "${KERNEL_CC#CC=}  (the kernel's own; modules only)"
   fi
 
   if resolve_privilege; then
