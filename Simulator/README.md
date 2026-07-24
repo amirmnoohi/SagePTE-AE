@@ -105,12 +105,27 @@ associative L1 TLBs, 1280-entry 5-way STLB, 64 KiB 4-way L1I/L1D, 1 MiB 8-way
 L2, 16 MiB 16-way shared SLC, 96 cores. All parameters are plain `drrun`
 knobs — copy a run script to customize.
 
-Results stream to the terminal and to `Results/<name>/sim_arm.log` (or
-`sim_x86.log`) at the repo root, where `<name>` is the input directory name
-(e.g. `redis`) — `Data/` holds only simulator inputs. Each run also writes
-`Results/<name>/analysis_arm.txt` (or `analysis_x86.txt`) with the parsed
-final statistics. The first 300 M references are cache/TLB warmup; the page walk
-statistics cover only post-warmup execution.
+The log goes to `Results/<name>/sim_arm.log` (or `sim_x86.log`) at the repo
+root, where `<name>` is the input directory name (e.g. `redis`) — `Data/` holds
+only simulator inputs. It is not streamed to the terminal: the simulator writes
+a line per page walk, so even the small `debug` capture produces a 4 MB log,
+and a full trace runs for hours. The terminal instead shows one progress line
+with a percentage and an estimate, measured from how far into the decoded trace
+the analyzer has actually read. Pass `--follow` to stream the log anyway, or
+watch it from another shell:
+
+```bash
+tail -f Results/<name>/sim_arm.log
+```
+
+Each run also writes `Results/<name>/analysis_arm.txt` (or `analysis_x86.txt`)
+with the parsed final statistics, and prints it when the run ends. The first
+300 M references are cache/TLB warmup; the page walk statistics cover only
+post-warmup execution.
+
+Both run scripts are thin: they declare a cache and TLB geometry and source
+`_simulate.sh`, which does everything else. To add a configuration, copy one of
+them and change the numbers.
 
 ## Output
 
