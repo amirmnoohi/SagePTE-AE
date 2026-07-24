@@ -43,15 +43,16 @@ produces one of them, and every component's entry point is called `run.sh`.
 | `Tracer/run.sh <workload>` | guest VM | `Data/<workload>/drmemtrace.dir/` |
 | `PageTables/Guest/run.sh <workload>` | guest VM | `Data/<workload>/pt_dump.guest` |
 | `PageTables/Host/run.sh <guest-pt>` | KVM host | `pt_dump.host` |
-| `Simulator/run_arm.sh ../Data/<workload>` | anywhere | `Results/<workload>/analysis_arm.txt` |
+| `Simulator/run_arm.sh ../Data/<workload>` | guest VM | `Results/<workload>/analysis_arm.txt` |
 
 ---
 
 ## Quick start
 
-### Simulate (no VM required)
+### Simulate an existing dataset
 
-With a published dataset unpacked into `Data/`, this is the whole reproduction:
+With a published dataset unpacked into `Data/`, this is the whole reproduction.
+Capture needs a guest VM; replaying an existing dataset does not:
 
 ```bash
 cd Simulator
@@ -85,11 +86,17 @@ and resumed once you confirm. See `Tracer/README.md` for the reasoning.
 Then, on the KVM host:
 
 ```bash
-./PageTables/Host/run.sh ~/pt_dump.debug \
-    --scp-back <user>@<guest>:/path/to/Data/debug/pt_dump.host
+# translate GPA -> HPA
+./PageTables/Host/run.sh ~/pt_dump.debug
 ```
 
-and back in the guest:
+Copy the result back into the guest:
+
+```bash
+scp ~/pt_dump.host  <user>@<guest>:/path/to/Data/debug/pt_dump.host
+```
+
+Then simulate, back in the guest:
 
 ```bash
 cd Simulator && ./run_arm.sh ../Data/debug

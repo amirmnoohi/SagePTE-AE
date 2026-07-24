@@ -118,7 +118,6 @@ fi
 GUEST_PT=""                       # the guest dump to translate
 OUTPUT_FILE=""                    # default: alongside the input, as pt_dump.host
 QEMU_PID="${QEMU_PID:-}"          # target QEMU process
-SCP_BACK=""                       # optional scp destination for the result
 FIX_HEADER=1                      # repair the record-count header if needed
 KEEP_RAW=0                        # keep the pre-augmentation translation
 RECORDS=0
@@ -134,8 +133,6 @@ ${C_BOLD}OPTIONS${C_RESET}
   -o, --output FILE    where to write the host page table
                        (default: <guest-pt-dir>/pt_dump.host)
   -q, --qemu-pid PID   QEMU process to translate against (default: auto-detect)
-  -s, --scp-back DEST  copy the result to DEST when finished, e.g.
-                       user@guest:/home/ubuntu/SAGEPTE-AE/Data/debug/pt_dump.host
       --keep-raw       keep the pre-augmentation translation alongside the result
       --no-header-fix  do not verify/repair the record-count header
       --no-color       disable coloured output
@@ -143,8 +140,10 @@ ${C_BOLD}OPTIONS${C_RESET}
   -V, --version        show the version
 
 ${C_BOLD}EXAMPLE${C_RESET}
-  ${PROG} ~/pt_dump.debug \\
-      --scp-back <user>@<guest>:/path/to/SAGEPTE-AE/Data/debug/pt_dump.host
+  ${PROG} ~/pt_dump.debug
+
+  Then copy the result back yourself:
+  scp ~/pt_dump.host <user>@<guest>:/path/to/Data/debug/pt_dump.host
 EOF
 }
 
@@ -261,7 +260,6 @@ while [[ $# -gt 0 ]]; do
     --no-color)      command -v ui::set_color >/dev/null 2>&1 && ui::set_color off; shift ;;
     -o|--output)     OUTPUT_FILE="${2:?--output requires a path}"; shift 2 ;;
     -q|--qemu-pid)   QEMU_PID="${2:?--qemu-pid requires a pid}"; shift 2 ;;
-    -s|--scp-back)   SCP_BACK="${2:?--scp-back requires a destination}"; shift 2 ;;
     --keep-raw)      KEEP_RAW=1; shift ;;
     --no-header-fix) FIX_HEADER=0; shift ;;
     -*)              UI_EXIT_CODE=1 ui::die "unknown option: $1" "try '${PROG} --help'" ;;
@@ -448,15 +446,6 @@ ui::step "Verification"
 
 verify_header "${OUTPUT_FILE}"
 
-if [[ -n "${SCP_BACK}" ]]; then
-  ui::info "copying to ${SCP_BACK}"
-  if scp "${OUTPUT_FILE}" "${SCP_BACK}"; then
-    ui::ok "delivered"
-  else
-    ui::warn "scp failed — the host page table is still at ${OUTPUT_FILE}"
-  fi
-fi
-
 trap - INT TERM
 
 # ------------------------------------------------------------------------------
@@ -470,12 +459,10 @@ ui::field "Records" "$(ui::number "${RECORDS}")"
 ui::field "Size" "$(ui::size_of "${OUTPUT_FILE}")"
 ui::field "Translated for" "qemu pid ${QEMU_PID}"
 
-if [[ -z "${SCP_BACK}" ]]; then
-  ui::blank
-  ui::rule
-  ui::blank
-  ui::note "copy it into the guest's data directory, then simulate:"
-  ui::command "scp ${OUTPUT_FILE}  <user>@<guest>:.../Data/<workload>/pt_dump.host"
-  ui::command "cd Simulator && ./run_arm.sh ../Data/<workload>"
-fi
+ui::blank
+ui::rule
+ui::blank
+ui::note "copy it into the guest's data directory, then simulate:"
+ui::command "scp ${OUTPUT_FILE}  <user>@<guest>:.../Data/<workload>/pt_dump.host"
+ui::command "cd Simulator && ./run_arm.sh ../Data/<workload>"
 ui::blank

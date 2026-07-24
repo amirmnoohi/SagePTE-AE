@@ -1,86 +1,109 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 728" width="980" height="728" role="img" aria-label="SagePTE pipeline: four stages, each with its input, the command to run, and where the output is stored">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 864" width="980" height="864" role="img" aria-label="SagePTE pipeline: four stages with their input, command and output. Stages 1, 2 and 4 run in the guest VM; stage 3 runs on the KVM host.">
+  <!-- Elevation is drawn as an offset rect rather than an feDropShadow filter:
+       librsvg drops an element's stroke when a filter is applied, which leaves
+       every card borderless. This renders identically everywhere. -->
   <defs>
-    <marker id="a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0 0 L8 4 L0 8 z" fill="#9aa6b2"/>
+    <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0 0 L8 4 L0 8 z" fill="#94a3b8"/>
     </marker>
     <style>
-      .f  { font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif; }
-      .m  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-      .h1 { font-size:20px; font-weight:700; fill:#0f1720; }
-      .h2 { font-size:12px; fill:#8a95a1; }
-      .chip  { font-size:12.5px; font-weight:600; fill:#0f1720; }
-      .chipw { font-size:10px; letter-spacing:.08em; fill:#8a95a1; }
-      .st { font-size:14.5px; font-weight:700; fill:#0f1720; letter-spacing:.02em; }
-      .lb { font-size:10px; font-weight:700; letter-spacing:.1em; fill:#a9b4bf; }
-      .vl { font-size:13px; fill:#26313c; }
-      .rn { font-size:13px; font-weight:600; fill:#0b5fa4; }
-      .nt { font-size:11.5px; fill:#8a95a1; }
-      .bd { font-size:11px; font-weight:700; letter-spacing:.06em; }
-      .n  { font-size:11.5px; font-weight:700; fill:#fff; }
+      .f   { font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif }
+      .m   { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
+      .h1  { font-size:21px; font-weight:700; fill:#0f172a; letter-spacing:-.01em }
+      .h2  { font-size:12.5px; fill:#64748b }
+      .env { font-size:9.5px; font-weight:700; letter-spacing:.13em }
+      .flow{ font-size:12px; font-weight:600; fill:#334155 }
+      .st  { font-size:14px; font-weight:700; fill:#0f172a; letter-spacing:.01em }
+      .lb  { font-size:9.5px; font-weight:700; letter-spacing:.12em; fill:#94a3b8 }
+      .vl  { font-size:12.5px; fill:#334155 }
+      .run { font-size:12.5px; font-weight:600; fill:#37517d }
+      .nt  { font-size:11px; fill:#94a3b8 }
+      .num { font-size:11.5px; font-weight:700; fill:#37517d }
+      .numh{ font-size:11.5px; font-weight:700; fill:#b45309 }
+      .xfer{ font-size:11.5px; fill:#64748b }
     </style>
   </defs>
-  <rect width="980" height="728" fill="#fff"/>
+  <rect width="980" height="864" fill="#fff"/>
 
-  <text class="f h1" x="56" y="46">SagePTE — pipeline</text>
-  <text class="f h2" x="56" y="66">Four stages. Each one takes an input, runs one command, and leaves its output in a known place.</text>
+  <text class="f h1" x="56" y="44">SagePTE — pipeline</text>
+  <text class="f h2" x="56" y="66">Each stage takes an input, runs one command, and leaves its output in a known place.</text>
 
-  <!-- ─────────── high level ─────────── -->
-  <g>
-    <rect x="56" y="92" width="186" height="46" rx="6" fill="#f7f9fb" stroke="#e3e8ee"/>
-    <text class="f chipw" x="70" y="112">GUEST</text><text class="f chip" x="70" y="129">1 · trace</text>
-    <rect x="266" y="92" width="186" height="46" rx="6" fill="#f7f9fb" stroke="#e3e8ee"/>
-    <text class="f chipw" x="280" y="112">GUEST</text><text class="f chip" x="280" y="129">2 · guest page table</text>
-    <rect x="476" y="92" width="186" height="46" rx="6" fill="#fdf8f1" stroke="#eddcc2"/>
-    <text class="f chipw" x="490" y="112" fill="#b98b45">HOST</text><text class="f chip" x="490" y="129">3 · host page table</text>
-    <rect x="686" y="92" width="186" height="46" rx="6" fill="#f4faf5" stroke="#d3e7d8"/>
-    <text class="f chipw" x="700" y="112" fill="#5d9a6c">EITHER</text><text class="f chip" x="700" y="129">4 · simulate</text>
-    <path d="M246 115 L262 115" stroke="#9aa6b2" stroke-width="1.3" marker-end="url(#a)"/>
-    <path d="M456 115 L472 115" stroke="#9aa6b2" stroke-width="1.3" marker-end="url(#a)"/>
-    <path d="M666 115 L682 115" stroke="#9aa6b2" stroke-width="1.3" marker-end="url(#a)"/>
-  </g>
+  <!-- ── overview: guest → host → guest ── -->
+  <rect x="56" y="92" width="322" height="54" rx="10" fill="#f6f8fb" stroke="#e2e8f0"/>
+  <text class="f env"  x="74" y="112" fill="#37517d">GUEST VM</text>
+  <text class="f flow" x="74" y="132">1  trace</text>
+  <text class="f flow" x="170" y="132">2  guest page table</text>
 
-  <!-- ─────────── detail ─────────── -->
-  <line x1="70" y1="186" x2="70" y2="580" stroke="#e3e8ee" stroke-width="1.6"/>
+  <rect x="404" y="92" width="212" height="54" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text class="f env"  x="422" y="112" fill="#b45309">KVM HOST</text>
+  <text class="f flow" x="422" y="132">3  host page table</text>
 
-  <!-- 1 -->
-  <circle cx="70" cy="186" r="12" fill="#16324f"/><text class="f n" x="70" y="190" text-anchor="middle">1</text>
-  <text class="f st" x="102" y="191">TRACE</text>
-  <rect x="806" y="176" width="68" height="20" rx="10" fill="#eaf2fb"/><text class="f bd" x="840" y="190" text-anchor="middle" fill="#2b5f96">GUEST</text>
-  <text class="f lb" x="102" y="218">IN</text> <text class="m vl" x="152" y="218">Workloads/&lt;name&gt;.sh</text>
-  <text class="f lb" x="102" y="242">RUN</text><text class="m rn" x="152" y="242">Tracer/run.sh &lt;name&gt;</text>
-  <text class="f lb" x="102" y="266">OUT</text><text class="m vl" x="152" y="266">Data/&lt;name&gt;/drmemtrace.dir/</text>
-  <text class="f nt" x="440" y="242">pauses here, holding the workload for stage 2</text>
+  <rect x="642" y="92" width="282" height="54" rx="10" fill="#f6f8fb" stroke="#e2e8f0"/>
+  <text class="f env"  x="660" y="112" fill="#37517d">GUEST VM</text>
+  <text class="f flow" x="660" y="132">4  simulate</text>
 
-  <!-- 2 -->
-  <circle cx="70" cy="308" r="12" fill="#16324f"/><text class="f n" x="70" y="312" text-anchor="middle">2</text>
-  <text class="f st" x="102" y="313">GUEST PAGE TABLE</text>
-  <rect x="806" y="298" width="68" height="20" rx="10" fill="#eaf2fb"/><text class="f bd" x="840" y="312" text-anchor="middle" fill="#2b5f96">GUEST</text>
-  <text class="f lb" x="102" y="340">IN</text> <text class="m vl" x="152" y="340">/proc/page_tables</text>
-  <text class="f lb" x="102" y="364">RUN</text><text class="m rn" x="152" y="364">PageTables/Guest/run.sh &lt;name&gt;</text>
-  <text class="f lb" x="102" y="388">OUT</text><text class="m vl" x="152" y="388">Data/&lt;name&gt;/pt_dump.guest</text>
-  <text class="f nt" x="440" y="340">exists only while the process is alive</text>
+  <path d="M384 119 L398 119" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ar)"/>
+  <path d="M622 119 L636 119" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ar)"/>
 
-  <!-- boundary -->
-  <line x1="102" y1="420" x2="362" y2="420" stroke="#dbe2e9" stroke-width="1.4" stroke-dasharray="6 5"/>
-  <line x1="626" y1="420" x2="874" y2="420" stroke="#dbe2e9" stroke-width="1.4" stroke-dasharray="6 5"/>
-  <text class="m nt" x="494" y="424" text-anchor="middle">scp pt_dump.guest  →  the KVM host</text>
+  <!-- ══ 1 ══ -->
+  <rect x="56" y="186" width="868" height="140" rx="12" fill="#eef1f5"/>
+  <rect x="56" y="184" width="868" height="140" rx="12" fill="#fff" stroke="#e2e8f0"/>
+  <rect x="78" y="202" width="26" height="26" rx="7" fill="#37517d" fill-opacity="0.08"/>
+  <text class="f num" x="91" y="219" text-anchor="middle">1</text>
+  <text class="f st"  x="116" y="220">TRACE</text>
+  <rect x="838" y="203" width="66" height="19" rx="9.5" fill="#eef2f8"/>
+  <text class="f env" x="871" y="216" text-anchor="middle" fill="#37517d">GUEST</text>
+  <text class="f lb" x="78" y="256">IN</text>  <text class="m vl"  x="132" y="256">Workloads/&lt;name&gt;.sh</text>
+  <text class="f lb" x="78" y="282">RUN</text> <text class="m run" x="132" y="282">Tracer/run.sh &lt;name&gt;</text>
+  <text class="f lb" x="78" y="308">OUT</text> <text class="m vl"  x="132" y="308">Data/&lt;name&gt;/drmemtrace.dir/</text>
+  <text class="f nt" x="470" y="282">pauses here, holding the workload for stage 2</text>
 
-  <!-- 3 -->
-  <circle cx="70" cy="462" r="12" fill="#a2691a"/><text class="f n" x="70" y="466" text-anchor="middle">3</text>
-  <text class="f st" x="102" y="467">HOST PAGE TABLE</text>
-  <rect x="812" y="452" width="62" height="20" rx="10" fill="#fdf3e6"/><text class="f bd" x="843" y="466" text-anchor="middle" fill="#a2691a">HOST</text>
-  <text class="f lb" x="102" y="494">IN</text> <text class="m vl" x="152" y="494">pt_dump.guest  ·  the running QEMU process</text>
-  <text class="f lb" x="102" y="518">RUN</text><text class="m rn" x="152" y="518">PageTables/Host/run.sh ~/pt_dump.&lt;name&gt;</text>
-  <text class="f lb" x="102" y="542">OUT</text><text class="m vl" x="152" y="542">pt_dump.host</text>
-  <text class="m nt" x="272" y="542">→ scp back into Data/&lt;name&gt;/</text>
+  <!-- ══ 2 ══ -->
+  <rect x="56" y="342" width="868" height="140" rx="12" fill="#eef1f5"/>
+  <rect x="56" y="340" width="868" height="140" rx="12" fill="#fff" stroke="#e2e8f0"/>
+  <rect x="78" y="358" width="26" height="26" rx="7" fill="#37517d" fill-opacity="0.08"/>
+  <text class="f num" x="91" y="375" text-anchor="middle">2</text>
+  <text class="f st"  x="116" y="376">GUEST PAGE TABLE</text>
+  <rect x="838" y="359" width="66" height="19" rx="9.5" fill="#eef2f8"/>
+  <text class="f env" x="871" y="372" text-anchor="middle" fill="#37517d">GUEST</text>
+  <text class="f lb" x="78" y="412">IN</text>  <text class="m vl"  x="132" y="412">/proc/page_tables</text>
+  <text class="f lb" x="78" y="438">RUN</text> <text class="m run" x="132" y="438">PageTables/Guest/run.sh &lt;name&gt;</text>
+  <text class="f lb" x="78" y="464">OUT</text> <text class="m vl"  x="132" y="464">Data/&lt;name&gt;/pt_dump.guest</text>
+  <text class="f nt" x="470" y="412">exists only while the process is alive</text>
 
-  <!-- 4 -->
-  <circle cx="70" cy="580" r="12" fill="#2f6b3c"/><text class="f n" x="70" y="584" text-anchor="middle">4</text>
-  <text class="f st" x="102" y="585">SIMULATE</text>
-  <rect x="806" y="570" width="68" height="20" rx="10" fill="#f4faf5"/><text class="f bd" x="840" y="584" text-anchor="middle" fill="#2f6b3c">EITHER</text>
-  <text class="f lb" x="102" y="612">IN</text> <text class="m vl" x="152" y="612">drmemtrace.dir/  ·  pt_dump.guest  ·  pt_dump.host</text>
-  <text class="f lb" x="102" y="636">RUN</text><text class="m rn" x="152" y="636">Simulator/run_arm.sh ../Data/&lt;name&gt;</text>
-  <text class="f lb" x="102" y="660">OUT</text><text class="m vl" x="152" y="660">Results/&lt;name&gt;/analysis_arm.txt</text>
+  <!-- transfer up -->
+  <path d="M470 486 L470 508" stroke="#cbd5e1" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text class="f xfer" x="486" y="503">copy <tspan class="m">pt_dump.guest</tspan> up to the host</text>
 
-  <text class="f nt" x="102" y="698">Optional: <tspan class="m">Tracer/convert_trace.sh &lt;name&gt;</tspan> decodes the trace up front — otherwise stage 4 does it on first run.</text>
+  <!-- ══ 3 ══ -->
+  <rect x="56" y="518" width="868" height="140" rx="12" fill="#f3ece0"/>
+  <rect x="56" y="516" width="868" height="140" rx="12" fill="#fffdf7" stroke="#fde68a"/>
+  <rect x="78" y="534" width="26" height="26" rx="7" fill="#f59e0b" fill-opacity="0.16"/>
+  <text class="f numh" x="91" y="551" text-anchor="middle">3</text>
+  <text class="f st"   x="116" y="552">HOST PAGE TABLE</text>
+  <rect x="846" y="535" width="58" height="19" rx="9.5" fill="#fef3c7"/>
+  <text class="f env" x="875" y="548" text-anchor="middle" fill="#b45309">HOST</text>
+  <text class="f lb" x="78" y="588">IN</text>  <text class="m vl"  x="132" y="588">pt_dump.guest</text>
+  <text class="f nt" x="256" y="588">plus the running QEMU process</text>
+  <text class="f lb" x="78" y="614">RUN</text> <text class="m run" x="132" y="614">PageTables/Host/run.sh ~/pt_dump.&lt;name&gt;</text>
+  <text class="f lb" x="78" y="640">OUT</text> <text class="m vl"  x="132" y="640">pt_dump.host</text>
+
+  <!-- transfer back -->
+  <path d="M470 662 L470 684" stroke="#cbd5e1" stroke-width="1.4" marker-end="url(#ar)"/>
+  <text class="f xfer" x="486" y="679">copy <tspan class="m">pt_dump.host</tspan> back into <tspan class="m">Data/&lt;name&gt;/</tspan></text>
+
+  <!-- ══ 4 ══ -->
+  <rect x="56" y="694" width="868" height="140" rx="12" fill="#eef1f5"/>
+  <rect x="56" y="692" width="868" height="140" rx="12" fill="#fff" stroke="#e2e8f0"/>
+  <rect x="78" y="710" width="26" height="26" rx="7" fill="#37517d" fill-opacity="0.08"/>
+  <text class="f num" x="91" y="727" text-anchor="middle">4</text>
+  <text class="f st"  x="116" y="728">SIMULATE</text>
+  <rect x="838" y="711" width="66" height="19" rx="9.5" fill="#eef2f8"/>
+  <text class="f env" x="871" y="724" text-anchor="middle" fill="#37517d">GUEST</text>
+  <text class="f lb" x="78" y="764">IN</text>
+  <text class="m vl" x="132" y="764">drmemtrace.dir/</text>
+  <text class="m vl" x="286" y="764">pt_dump.guest</text>
+  <text class="m vl" x="426" y="764">pt_dump.host</text>
+  <text class="f lb" x="78" y="790">RUN</text> <text class="m run" x="132" y="790">Simulator/run_arm.sh ../Data/&lt;name&gt;</text>
+  <text class="f lb" x="78" y="816">OUT</text> <text class="m vl"  x="132" y="816">Results/&lt;name&gt;/analysis_arm.txt</text>
 </svg>
