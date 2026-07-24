@@ -1,0 +1,162 @@
+# SagePTE — Artifact
+
+Evaluation artifact for **SagePTE**, a virtual-memory design for virtualized
+systems that co-locates the guest and host page-table entries for a page inside
+a single 128-bit extended PTE, so the hardware page walker can return a host
+physical address at the guest leaf and skip the final host page-table
+traversal entirely.
+
+Under two-dimensional (nested) translation a TLB miss costs up to 24 sequential
+memory references, and the cost is not evenly spread: the terminal Stage-2 walk
+that resolves the *data* page — the **h-final phase** — accounts for up to 47%
+of total walk latency, because it is indexed by the data page's guest-physical
+address and therefore scales with the application's footprint rather than
+staying warm in the page-walk caches. This artifact measures that phase and
+what removing it is worth.
+
+---
+
+## What this repository contains
+
+The **tooling**: a memory tracer, guest and host page-table dumpers, a
+nested-page-walk simulator, and the workload definitions that drive them.
+
+It does **not** contain the captured data. A single Redis trace is ~19 GB and
+decoding it yields ~135 GB, so traces and page-table dumps are published
+separately (Zenodo; DOI assigned at camera-ready) and are re-creatable with the
+tools here.
+
+---
+
+## The pipeline
+
+```
+  ┌──────────────┐   ┌───────────────────────┐   ┌────────────────────┐   ┌──────────────┐
+  │  Workloads/  │──▶│        Tracer/        │──▶│    PageTables/     │──▶│  Simulator/  │
+  │              │   │                       │   │                    │   │              │
+  │  benchmarks  │   │  run.sh               │   │  Guest/run.sh      │   │ run_arm.sh   │
+  │  + defs      │   │  convert_trace.sh     │   │  Host/run.sh       │   │ run_x86.sh   │
+  └──────────────┘   └───────────────────────┘   └────────────────────┘   └──────────────┘
+                          memory trace              pt_dump.guest            page-walk
+                                                    pt_dump.host              latency
+                                                                            per design
+```
+
+The simulator needs **three** inputs: the memory trace, the guest page table
+(GVA→GPA) and the host page table (GPA→HPA). Each stage of the pipeline
+produces one of them, and every component's entry point is called `run.sh`.
+
+| Stage | Where it runs | Produces |
+| :-- | :-- | :-- |
+| `Tracer/run.sh <workload>` | guest VM | `Data/<workload>/drmemtrace.dir/` |
+| `PageTables/Guest/run.sh <workload>` | guest VM | `Data/<workload>/pt_dump.guest` |
+| `PageTables/Host/run.sh <guest-pt>` | KVM host | `pt_dump.host` |
+| `Simulator/run_arm.sh ../Data/<workload>` | anywhere | `Results/<workload>/analysis_arm.txt` |
+
+---
+
+## Quick start
+
+### Simulate (no VM required)
+
+With a published dataset unpacked into `Data/`, this is the whole reproduction:
+
+```bash
+cd Simulator
+./install.sh                      # builds the simulator
+./run_x86.sh example              # ~1 min smoke test
+./run_arm.sh ../Data/redis        # the paper's configuration
+cat ../Results/redis/analysis_arm.txt
+```
+
+The smoke test is self-contained and needs no dataset: it ships with a small
+trace and matching dumps, and should report 9548 walks, ~109 cycles for nested
+paging and a ~1.25× SagePTE speedup.
+
+### Capture a workload yourself
+
+Requires a QEMU/KVM host–guest pair. Inside the guest, in two terminals:
+
+```bash
+# terminal 1 — record the trace; it pauses partway through
+./Tracer/run.sh debug
+
+# terminal 2 — capture the page table while the workload is held
+./PageTables/Guest/run.sh debug
+```
+
+The tracer pauses on purpose. `/proc` exposes a process's page table only while
+that process is alive, so the snapshot has to be taken *during* the run; the
+workload is `SIGSTOP`ped at exactly the point where its page table is complete,
+and resumed once you confirm. See `Tracer/README.md` for the reasoning.
+
+Then, on the KVM host:
+
+```bash
+./PageTables/Host/run.sh ~/pt_dump.debug \
+    --scp-back <user>@<guest>:/path/to/Data/debug/pt_dump.host
+```
+
+and back in the guest:
+
+```bash
+cd Simulator && ./run_arm.sh ../Data/debug
+```
+
+---
+
+## Layout
+
+| Path | Contents |
+| :-- | :-- |
+| `Tracer/` | DynamoRIO fork whose `drcachesim` client can start recording on demand, plus `run.sh` and `convert_trace.sh`. See `Tracer/README.md`. |
+| `PageTables/Guest/` | kernel module exporting `/proc/page_tables`, and the dumper that turns it into simulator input |
+| `PageTables/Host/` | kernel module that walks QEMU's page tables (GPA→HPA), the augmentor that makes its output loadable, and the driver |
+| `Simulator/` | DynamoRIO fork with a modified `drcachesim` that replays every TLB miss as a full 2D walk. See `Simulator/README.md`. |
+| `Workloads/` | benchmarks (a fork of `mitosis-project/vmitosis-workloads`) and one declarative definition file per workload |
+| `Lib/ui.sh` | shared terminal presentation layer used by all the scripts |
+| `Results/` | reference analyses to compare your own runs against |
+
+### Adding a workload
+
+Copy `Workloads/_template.sh` to `Workloads/<name>.sh`, set the binary,
+arguments and readiness signal, and it is immediately runnable as
+`./Tracer/run.sh <name>`. No script needs editing.
+
+---
+
+## Requirements
+
+| | |
+| :-- | :-- |
+| Simulation only | Linux x86-64, gcc/g++ 7, CMake ≥ 3.2, Python 3 |
+| Capture | a QEMU/KVM host–guest pair, kernel headers, root in both |
+| Host page tables | **Linux ≥ 6.1** on the KVM host — the module uses the maple-tree VMA iterators (`VMA_ITERATOR`, `for_each_vma`) |
+| Disk | traces are large: ~19 GB raw per workload, ~9× that once decoded |
+
+`./install_deps.sh` installs the toolchain on Ubuntu.
+
+> **Note on AVX-512.** The bundled DynamoRIO (7.0.0) predates AVX-512 and
+> crashes at startup on machines that expose it: the kernel writes a 2440-byte
+> XSTATE into a 832-byte buffer during signal initialisation. Disable it for the
+> VM — `-cpu host,-avx512f,-avx512dq,-avx512cd,-avx512bw,-avx512vl,-avx512ifma,-avx512vbmi`
+> — or via `clearcpuid=` on the guest kernel command line.
+
+---
+
+## Licensing and attribution
+
+This repository aggregates several upstream projects; each retains its own
+licence, and those notices are kept intact.
+
+| Component | Origin | Licence |
+| :-- | :-- | :-- |
+| `Tracer/`, `Simulator/` | [DynamoRIO](https://dynamorio.org) | BSD — see `License.txt` in each |
+| `Workloads/` | [vmitosis-workloads](https://github.com/mitosis-project/vmitosis-workloads) and the benchmarks it packages (Redis, Graph500, XSBench, Canneal/PARSEC, BTree, GUPS, STREAM) | per-benchmark; see each subdirectory |
+| `PageTables/*/` kernel modules | this work | GPLv2, as required for Linux modules |
+| Scripts, workload definitions, `Lib/` | this work | same terms as the artifact |
+
+The comparison designs evaluated alongside SagePTE — ASAP, Agile Paging, DMT,
+ECPT, FPT and TPT — are prior work by their respective authors and are cited in
+the paper; this repository contains only our own re-implementation of their
+page-walk cost models, in `Simulator/scripts/parse_walk_stats.py`.

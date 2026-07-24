@@ -1,0 +1,22 @@
+=== Results/example/sim_x86.log (final dump) (4KB walks) ===
+Total page walks (post-warmup): 9548
+DMT range hit rate:             100.00%
+
+Average latency per reference (cycles):
+  G1H1=   4.07  G1H2=   4.03  G1H3=   4.10  G1H4=   4.11  G1=   4.43
+  G2H1=   4.00  G2H2=   4.00  G2H3=   4.00  G2H4=   4.00  G2=   4.37
+  G3H1=   4.00  G3H2=   4.00  G3H3=   4.00  G3H4=   4.00  G3=   4.10
+  G4H1=   4.00  G4H2=   4.00  G4H3=   4.00  G4H4=   4.02  G4=   9.74
+  UDH1=   4.00  UDH2=   4.00  UDH3=   4.37  UDH4=   9.48
+
+h-final phase: 21.85 cycles = 20.1% of walk latency
+
+Design                 Avg walk (cycles)  Speedup vs NPW
+Nested paging (NPW)               108.84           1.00x
+SagePTE                            86.99           1.25x
+DMT                                23.24           4.68x
+ECPT                               35.24           3.09x
+FPT                                43.61           2.50x
+ASAP                               43.33           2.51x
+Agile Paging                       44.48           2.45x
+

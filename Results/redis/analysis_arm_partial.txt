@@ -1,0 +1,22 @@
+=== Results/redis/sim_arm.log (final dump) (4KB walks) === — PARTIAL: run stopped at 5.63B of ~9B refs
+Total page walks (post-warmup): 11943366
+DMT range hit rate:             100.00%
+
+Average latency per reference (cycles):
+  G1H1=   0.01  G1H2=   0.01  G1H3=   0.55  G1H4=   2.11  G1=   2.12
+  G2H1=   0.01  G2H2=   0.01  G2H3=   0.55  G2H4=   2.17  G2=   3.16
+  G3H1=   1.12  G3H2=   1.19  G3H3=   3.45  G3H4=   7.70  G3=  29.27
+  G4H1=   1.30  G4H2=   1.41  G4H3=   4.31  G4H4=  35.45  G4= 132.08
+  UDH1=   4.00  UDH2=   4.78  UDH3=  30.42  UDH4= 132.83
+
+h-final phase: 172.03 cycles = 43.0% of walk latency
+
+Design                 Avg walk (cycles)  Speedup vs NPW
+Nested paging (NPW)               400.01           1.00x
+SagePTE                           227.97           1.75x
+DMT                               300.35           1.33x
+ECPT                              312.35           1.28x
+FPT                               311.88           1.28x
+ASAP                              302.48           1.32x
+Agile Paging                      338.66           1.18x
+
