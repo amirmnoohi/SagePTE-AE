@@ -12,6 +12,20 @@ all: btree canneal graph500 gups xsbench redis stream
 clean-all: clean-btree clean-canneal clean-graph500 clean-gups clean-xsbench \
 	clean-redis
 
+# Every workload target below names a rule that has prerequisites but no recipe
+# (e.g. `btree : bin/bench_btree_st ...`), and shares its name with both the
+# directory it builds from and the <name>.sh run script beside it. Without
+# .PHONY, make supplies the missing recipe from its built-in `%: %.sh` rule and
+# runs `cat btree.sh > btree`, which dies with "Is a directory". Declaring them
+# phony skips the implicit-rule search, and stops the directory's timestamp from
+# making a target look already up to date.
+.PHONY: all clean clean-all \
+	btree canneal graph500 gups xsbench redis stream \
+	hashjoin liblinear pagerank memcached memops \
+	clean-btree clean-canneal clean-graph500 clean-gups clean-xsbench \
+	clean-redis clean-hashjoin clean-liblinear clean-pagerank \
+	clean-memcached clean-memops clean-stream
+
 
 ###############################################################################
 # Workloads
