@@ -80,6 +80,7 @@ PROG="${SCRIPT_DIR#"${REPO_ROOT}/"}/$(basename "${BASH_SOURCE[0]:-$0}")"
 readonly PROG
 readonly PT_PROC="/proc/page_tables"        # interface exported by the module
 readonly MODULE_DIR="${SCRIPT_DIR}"          # the module sources live beside this script
+readonly MODULE_NAME="dump_pagetables"       # as it appears in lsmod, and <name>.ko
 readonly HOST_DUMPER="${SCRIPT_DIR}/../Host/run.sh"
 
 # shellcheck source=../../Lib/ui.sh
@@ -206,6 +207,70 @@ await_running_trace() {
     sleep 1
     ui::wait_tick
   done
+}
+
+#######################################
+# Ensure the dumper module is built and loaded, so a capture never stops to ask
+# for two commands this script could have issued itself. Doing it here matters
+# more than convenience: the target process is alive only for as long as the
+# tracer holds it, and a run that dies at this point has to be started over.
+#
+# Three states are handled. Not built: build it. Built but not loaded: insert
+# it. Loaded yet exporting nothing — a module left over from an earlier build,
+# which insmod reports only as the unhelpful "File exists" — drop it first and
+# insert the current one.
+#
+# The build deliberately goes through the Makefile, which selects the compiler
+# the running kernel was built with.
+# Globals:
+#   Reads MODULE_DIR, MODULE_NAME, PT_PROC, SUDO.
+# Returns:
+#   0 once ${PT_PROC} exists; exits 2 if it cannot get there.
+#######################################
+load_module() {
+  # Already up: say so only when this script owns the output, matching the rest
+  # of the environment checks.
+  if [[ -e "${PT_PROC}" ]]; then
+    (( COMPACT )) || ui::ok "module interface  ${PT_PROC}"
+    return 0
+  fi
+
+  local ko="${MODULE_DIR}/${MODULE_NAME}.ko"
+  local log="${MODULE_DIR}/build.log"
+
+  if [[ ! -f "${ko}" ]]; then
+    ui::info "the dumper module is not built — building it"
+    if ! make -C "${MODULE_DIR}" > "${log}" 2>&1; then
+      UI_EXIT_CODE=2 ui::die "the dumper module failed to build" \
+        "$(tail -n 3 "${log}" 2> /dev/null || true)" \
+        "" \
+        "full log: ${log}" \
+        "this needs the headers for the running kernel:" \
+        "    sudo apt-get install -y linux-headers-$(uname -r)"
+    fi
+    ui::ok "module built  $(ui::relpath "${ko}" "${REPO_ROOT}")"
+  fi
+
+  # A module from an earlier build can still be resident while its /proc entry
+  # is absent or stale. insmod only says "File exists", so unload first.
+  if lsmod 2> /dev/null | grep -q "^${MODULE_NAME} "; then
+    ui::info "a stale ${MODULE_NAME} is loaded — reloading it"
+    ${SUDO} rmmod "${MODULE_NAME}" 2> /dev/null ||
+      UI_EXIT_CODE=2 ui::die "could not unload the resident ${MODULE_NAME}" \
+        "something still holds it; check 'lsmod | grep ${MODULE_NAME}'"
+  fi
+
+  if ! ${SUDO} insmod "${ko}" 2> /dev/null; then
+    UI_EXIT_CODE=2 ui::die "could not insert ${MODULE_NAME}.ko" \
+      "check 'dmesg | tail' — a kernel/module version mismatch is the usual cause" \
+      "rebuild it against the running kernel:" \
+      "    make -C ${MODULE_DIR} clean && make -C ${MODULE_DIR}"
+  fi
+
+  [[ -e "${PT_PROC}" ]] ||
+    UI_EXIT_CODE=2 ui::die "${PT_PROC} did not appear after loading ${MODULE_NAME}" \
+      "check 'dmesg | tail' for the module's own complaint"
+  ui::ok "module loaded  ${PT_PROC}"
 }
 
 #######################################
@@ -400,14 +465,10 @@ fi
 
 ui::step "Environment"
 
-[[ -e "${PT_PROC}" ]] ||
-  UI_EXIT_CODE=2 ui::die "${PT_PROC} does not exist — the dumper module is not loaded" \
-    "build and load it with:" \
-    "    cd ${MODULE_DIR} && make && sudo insmod dump_pagetables.ko"
+load_module
 # These confirm a healthy environment, which matters when the dumper is run on
 # its own; nested, they are noise — a failure still aborts loudly either way.
 if (( ! COMPACT )); then
-  ui::ok "module interface  ${PT_PROC}"
   [[ -n "${SUDO}" ]] && ui::info "not running as root — privileged steps use sudo"
   ui::ok "target process alive"
 fi
