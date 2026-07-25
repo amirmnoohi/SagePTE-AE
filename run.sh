@@ -600,7 +600,14 @@ TRACE_LOG="${LOG_DIR}/${WORKLOAD}.trace.log"
 # A capture directory is named drmemtrace.<binary>.<pid>.<tid>.dir, never
 # "drmemtrace.dir". Matching the literal name finds nothing, concludes there is
 # no capture, and falls through to the branch that deletes one.
-EXISTING_TRACE="$(find "${OUTPUT_DIR}" -maxdepth 1 -name 'drmemtrace*' -type d 2> /dev/null | sort | head -1)"
+# The directory is absent on a first capture, and find exits non-zero for it.
+# Under `set -e` with pipefail that failure propagates out of the assignment and
+# kills the run with no message at all, so it is guarded rather than relied on.
+EXISTING_TRACE=""
+if [[ -d "${OUTPUT_DIR}" ]]; then
+  EXISTING_TRACE="$(find "${OUTPUT_DIR}" -maxdepth 1 -name 'drmemtrace*' -type d 2> /dev/null |
+    sort | head -1 || true)"
+fi
 
 if [[ -n "${EXISTING_TRACE}" && -f "${GUEST_PT}" ]] && (( ! FORCE_CAPTURE )); then
   ui::ok "already captured  $(ui::relpath "${EXISTING_TRACE}" "${REPO_ROOT}") ($(ui::size_of "${EXISTING_TRACE}"))"
@@ -801,7 +808,8 @@ fi
 # ------------------------------------------------------------------------------
 ui::step "Decode"
 
-TRACE_SUBDIR="$(find "${OUTPUT_DIR}" -maxdepth 1 -name 'drmemtrace*' -type d | sort | head -1)"
+TRACE_SUBDIR="$(find "${OUTPUT_DIR}" -maxdepth 1 -name 'drmemtrace*' -type d 2> /dev/null |
+  sort | head -1 || true)"
 [[ -n "${TRACE_SUBDIR}" ]] ||
   UI_EXIT_CODE=3 ui::die "no drmemtrace directory in $(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}")"
 
