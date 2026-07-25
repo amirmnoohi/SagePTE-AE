@@ -70,6 +70,10 @@ readonly TRACE_FILENAME="drmemtrace.trace"
 # Observed expansion from raw capture to decoded trace, used only to size the
 # progress bar while decoding. 7.1x measured on the debug capture.
 readonly DECODE_EXPANSION=7
+# Below this multiple of the raw capture a decoded trace is treated as the
+# truncated remains of an interrupted run. Set well under DECODE_EXPANSION so
+# that a workload which happens to expand less than usual is not rejected.
+readonly MIN_DECODE_EXPANSION=3
 
 # shellcheck source=../Lib/ui.sh
 source "${REPO_ROOT}/Lib/ui.sh"
@@ -81,12 +85,18 @@ TRACE_ARG=""          # the trace directory, positional
 GUEST_PT_ARG=""       # optional override, positional
 HOST_PT_ARG=""        # optional override, positional
 FOLLOW=0              # 1 = stream the simulator log instead of a progress line
+ASSUME_DECODED=0      # 1 = trust a decoded trace that looks too small
 OUT_DIR_OPT=""        # -o/--output
 
 # Populated as the run progresses; referenced by the trap handler.
 SIM_PID=""
 TAIL_PID=""
 RUN_START=0
+# Which half of the run is in progress. The simulator decodes the raw capture
+# before it replays any of it, and those two phases fail for entirely different
+# reasons -- reporting a decode that ran out of disk as "the simulation failed"
+# sends the reader looking in the wrong place.
+SIM_PHASE="starting"
 
 #######################################
 # Print the help text.
@@ -109,6 +119,7 @@ ${C_BOLD}ARGUMENTS${C_RESET}
 ${C_BOLD}OPTIONS${C_RESET}
   -o, --output DIR   where results go       (default: Results/<trace name>)
   -f, --follow       stream the simulator log instead of a progress line
+      --assume-decoded  replay a decoded trace even if it looks truncated
       --no-color     disable coloured output
   -h, --help         show this message
   -V, --version      show the version
@@ -252,6 +263,7 @@ watch_simulation() {
   local pid_fd pid fd pos=0 total=0 verb
   local last_pos=0 last_time=${SECONDS} rate=0 now delta
 
+  (( DECODED_AT_START )) || SIM_PHASE="decoding"
   ui::wait_begin "starting the simulation"
   while kill -0 "${SIM_PID}" 2> /dev/null; do
     if pid_fd="$(find_reader)"; then
@@ -259,12 +271,12 @@ watch_simulation() {
       read -r pid fd <<< "${pid_fd}"
       pos="$(sed -n 's/^pos:[[:space:]]*//p' "/proc/${pid}/fdinfo/${fd}" 2> /dev/null || echo 0)"
       total="$(stat -c %s "${TRACE_FILE}" 2> /dev/null || echo 0)"
-      verb="replaying"
+      verb="replaying"; SIM_PHASE="replaying"
     elif [[ -f "${TRACE_FILE}" ]] && (( ! DECODED_AT_START )); then
       # Decoding: the decoded file is still being written.
       pos="$(stat -c %s "${TRACE_FILE}" 2> /dev/null || echo 0)"
       total=$(( RAW_BYTES * DECODE_EXPANSION ))
-      verb="decoding"
+      verb="decoding"; SIM_PHASE="decoding"
     else
       ui::wait_tick "starting the simulation"
       sleep 1
@@ -319,6 +331,7 @@ while (( $# > 0 )); do
     -V | --version) printf '%s %s\n' "${PROG}" "${VERSION}"; exit 0 ;;
     --no-color)     ui::set_color off; shift ;;
     -f | --follow)  FOLLOW=1; shift ;;
+    --assume-decoded) ASSUME_DECODED=1; shift ;;
     -o | --output)  OUT_DIR_OPT="${2:?--output requires a directory}"; shift 2 ;;
     -*)             UI_EXIT_CODE=1 ui::die "unknown option: $1" "try './${PROG} --help'" ;;
     *)
@@ -382,6 +395,26 @@ RAW_BYTES="$(du -sb "${TRACE}/raw" 2> /dev/null | cut -f1 || true)"
 RAW_BYTES="${RAW_BYTES:-0}"
 
 if [[ -s "${TRACE_FILE}" ]]; then
+  # A decode that was interrupted leaves a truncated file behind, and a
+  # truncated trace replays without complaining -- it just ends early and
+  # reports statistics for however much of the workload survived. Since a
+  # complete decode is several times the raw capture, anything close to the
+  # raw size is the remains of a killed run, not a trace.
+  if (( RAW_BYTES > 0 )) && (( ! ASSUME_DECODED )) &&
+    (( $(stat -c %s "${TRACE_FILE}") < RAW_BYTES * MIN_DECODE_EXPANSION )); then
+    ui::warn "the decoded trace looks incomplete"
+    ui::field "decoded" "$(ui::size_of "${TRACE_FILE}")"
+    ui::field "raw"     "$(ui::size_of "${TRACE}/raw")"
+    ui::field "expected" "~$(ui::bytes $(( RAW_BYTES * DECODE_EXPANSION )))"
+    UI_EXIT_CODE=2 ui::die "refusing to replay what looks like a partial decode" \
+      "an interrupted decode leaves a truncated file that replays silently," \
+      "reporting statistics for only the part that was written" \
+      "" \
+      "delete it and let this run decode again:" \
+      "    rm $(ui::relpath "${TRACE_FILE}" "${REPO_ROOT}")" \
+      "" \
+      "or pass --assume-decoded if the trace really is complete"
+  fi
   DECODED_AT_START=1
   ui::ok "decoded trace  $(ui::size_of "${TRACE_FILE}")"
 else
@@ -429,14 +462,43 @@ SIM_PID=""
 
 if (( SIM_STATUS != 0 )); then
   ui::wait_abort
-  ui::fail "the simulation failed (exit ${SIM_STATUS})"
+
+  # Name the phase, not the command. The simulator decodes the raw capture
+  # before replaying any of it, and a decode that ran out of disk has nothing
+  # to do with the simulation the reader would otherwise go looking at.
+  case "${SIM_PHASE}" in
+    decoding)  what="decoding the trace" ;;
+    replaying) what="the simulation" ;;
+    *)         what="the simulator" ;;
+  esac
+
+  # An exit above 128 is a signal, not a failure of the run's own making.
+  if (( SIM_STATUS > 128 )); then
+    signo=$(( SIM_STATUS - 128 ))
+    ui::fail "${what} was terminated by signal ${signo} ($(kill -l "${signo}" 2> /dev/null || echo "signal ${signo}"))"
+    ui::note "something outside this run stopped it — it did not fail on its own"
+    outcome="STOPPED"
+  else
+    ui::fail "${what} failed (exit ${SIM_STATUS})"
+    outcome="FAILED"
+  fi
+
   ui::blank
   while IFS= read -r line; do
     printf '      %s%s%s\n' "${C_DIM}" "${line}" "${C_RESET}"
   done < <(tail -n 8 "${SIM_LOG}" 2> /dev/null)
   ui::blank
+
+  # A decode stopped part-way leaves a truncated trace that would otherwise be
+  # mistaken for a finished one on the next run.
+  if [[ "${SIM_PHASE}" == decoding && -s "${TRACE_FILE}" ]]; then
+    ui::warn "a partial decode is left at $(ui::relpath "${TRACE_FILE}" "${REPO_ROOT}") ($(ui::size_of "${TRACE_FILE}"))"
+    ui::note "delete it before re-running, or the next run replays a truncated trace:"
+    ui::command "rm $(ui::relpath "${TRACE_FILE}" "${REPO_ROOT}")"
+  fi
+
   ui::note "full log: $(ui::relpath "${SIM_LOG}" "${REPO_ROOT}")"
-  ui::result_banner fail "SIMULATION FAILED ${G_DOT} ${NAME}"
+  ui::result_banner fail "${what^^} ${outcome} ${G_DOT} ${NAME}"
   exit 3
 fi
 
