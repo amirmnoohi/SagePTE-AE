@@ -36,7 +36,8 @@ tools here.
 
 The simulator needs **three** inputs: the memory trace, the guest page table
 (GVA→GPA) and the host page table (GPA→HPA). Each stage of the pipeline
-produces one of them, and every component's entry point is called `run.sh`.
+produces one of them: it takes one input, runs one command, and leaves its
+output in a known place. Every component's entry point is called `run.sh`.
 
 | Stage | Where it runs | Produces |
 | :-- | :-- | :-- |

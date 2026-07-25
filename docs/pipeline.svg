@@ -1,109 +1,151 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 864" width="980" height="864" role="img" aria-label="SagePTE pipeline: four stages with their input, command and output. Stages 1, 2 and 4 run in the guest VM; stage 3 runs on the KVM host.">
-  <!-- Elevation is drawn as an offset rect rather than an feDropShadow filter:
-       librsvg drops an element's stroke when a filter is applied, which leaves
-       every card borderless. This renders identically everywhere. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 702" width="980" height="702" role="img" aria-labelledby="t d">
+  <title id="t">The SagePTE capture pipeline</title>
+  <desc id="d">Four stages, each with an input, one command and an output. Stages 1 and 2 run in the guest VM and produce the memory trace and the guest page table. The guest page table is copied to the KVM host, where stage 3 translates it to host physical addresses. That result is copied back into the guest, where stage 4 simulates using all three inputs.</desc>
+
   <defs>
-    <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
-      <path d="M0 0 L8 4 L0 8 z" fill="#94a3b8"/>
+    <!-- A real blurred shadow, applied only to a stroke-less rect drawn behind
+         each card. Filtering the card itself would lose its border: librsvg
+         drops an element's stroke when a filter is applied to it. -->
+    <filter id="sh" x="-8%" y="-16%" width="116%" height="150%">
+      <feGaussianBlur stdDeviation="3.5"/>
+    </filter>
+    <marker id="ar" viewBox="0 0 8 8" refX="6.6" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0.6 L7.4 4 L0 7.4 z" class="arrowhead"/>
     </marker>
+
     <style>
-      .f   { font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif }
-      .m   { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace }
-      .h1  { font-size:21px; font-weight:700; fill:#0f172a; letter-spacing:-.01em }
-      .h2  { font-size:12.5px; fill:#64748b }
-      .env { font-size:9.5px; font-weight:700; letter-spacing:.13em }
-      .flow{ font-size:12px; font-weight:600; fill:#334155 }
-      .st  { font-size:14px; font-weight:700; fill:#0f172a; letter-spacing:.01em }
-      .lb  { font-size:9.5px; font-weight:700; letter-spacing:.12em; fill:#94a3b8 }
-      .vl  { font-size:12.5px; fill:#334155 }
-      .run { font-size:12.5px; font-weight:600; fill:#37517d }
-      .nt  { font-size:11px; fill:#94a3b8 }
-      .num { font-size:11.5px; font-weight:700; fill:#37517d }
-      .numh{ font-size:11.5px; font-weight:700; fill:#b45309 }
-      .xfer{ font-size:11.5px; fill:#64748b }
+      .f { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif }
+      .m { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace }
+
+      /* ── surfaces ───────────────────────────────────────────────── */
+      .laneG   { fill:#f7f9fc; stroke:#e6ecf4 }
+      .laneH   { fill:#fffaeb; stroke:#f6e3b0 }
+      .card    { fill:#ffffff; stroke:#e4e9f1 }
+      .cardH   { fill:#fffefb; stroke:#f2e0b4 }
+      .shadow  { fill:#0f172a; opacity:.085 }
+      .badge   { fill:#37517d; opacity:.08 }
+      .badgeH  { fill:#b45309; opacity:.12 }
+      .divider { stroke:#e9eef5 }
+      .arrow   { stroke:#9aa8bb }
+      .arrowhead { fill:#9aa8bb }
+      .dotG    { fill:#5b7bb5 }
+      .dotH    { fill:#d9930d }
+
+      /* ── type ───────────────────────────────────────────────────── */
+      .lane  { font-size:10px; font-weight:700; letter-spacing:.15em; fill:#47638f }
+      .laneh { font-size:10px; font-weight:700; letter-spacing:.15em; fill:#92620a }
+      .span  { font-size:10.5px; fill:#64748b; letter-spacing:.02em }
+      .num   { font-size:12px; font-weight:700; fill:#37517d }
+      .numh  { font-size:12px; font-weight:700; fill:#8a4a08 }
+      .title { font-size:14.5px; font-weight:700; fill:#111a2b; letter-spacing:.02em }
+      .note  { font-size:11px; fill:#64748b }
+      .key   { font-size:9.5px; font-weight:700; letter-spacing:.11em; fill:#64748b }
+      .val   { font-size:12.5px; fill:#33415a }
+      .cmd   { font-size:12.5px; font-weight:600; fill:#2f4e86 }
+      .sep   { font-size:12.5px; fill:#c6d0dd }
+      .xfer  { font-size:11.5px; fill:#64748b }
+
+      @media (prefers-color-scheme: dark) {
+        .laneG   { fill:#121822; stroke:#222d3c }
+        .laneH   { fill:#1e1809; stroke:#3f3315 }
+        .card    { fill:#19212c; stroke:#2a3646 }
+        .cardH   { fill:#211a0c; stroke:#463819 }
+        .shadow  { fill:#000000; opacity:.30 }
+        .badge   { fill:#7aa2e3; opacity:.16 }
+        .badgeH  { fill:#e0a458; opacity:.18 }
+        .divider { stroke:#26313f }
+        .arrow   { stroke:#4a5768 }
+        .arrowhead { fill:#4a5768 }
+        .dotG    { fill:#7aa2e3 }
+        .dotH    { fill:#e0a458 }
+        .lane    { fill:#7aa2e3 }
+        .laneh   { fill:#e0a458 }
+        .span    { fill:#8a99ad }
+        .num     { fill:#9dbcf0 }
+        .numh    { fill:#e9b571 }
+        .title   { fill:#e8eef6 }
+        .note    { fill:#8a99ad }
+        .key     { fill:#7d8ea3 }
+        .val     { fill:#c2ccd9 }
+        .cmd     { fill:#9dbcf0 }
+        .sep     { fill:#3c4757 }
+        .xfer    { fill:#8a99ad }
+      }
     </style>
   </defs>
-  <rect width="980" height="864" fill="#fff"/>
 
-  <text class="f h1" x="56" y="44">SagePTE — pipeline</text>
-  <text class="f h2" x="56" y="66">Each stage takes an input, runs one command, and leaves its output in a known place.</text>
+  <!-- ════════════════ lane: guest VM, stages 1-2 ════════════════ -->
+  <rect class="laneG" x="36" y="8" width="908" height="278" rx="14"/>
+  <circle class="dotG" cx="59" cy="30" r="3.5"/>
+  <text class="f lane" x="72" y="34">GUEST VM</text>
+  <text class="f span" x="926" y="34" text-anchor="end">stages 1 – 2</text>
 
-  <!-- ── overview: guest → host → guest ── -->
-  <rect x="56" y="92" width="322" height="54" rx="10" fill="#f6f8fb" stroke="#e2e8f0"/>
-  <text class="f env"  x="74" y="112" fill="#37517d">GUEST VM</text>
-  <text class="f flow" x="74" y="132">1  trace</text>
-  <text class="f flow" x="170" y="132">2  guest page table</text>
+  <!-- ── 1 ── -->
+  <rect class="shadow" x="54" y="51" width="872" height="104" rx="11" filter="url(#sh)"/>
+  <rect class="card"   x="54" y="48" width="872" height="104" rx="11"/>
+  <rect class="badge"  x="74" y="66" width="27" height="27" rx="8"/>
+  <text class="f num"   x="87.5" y="84.5" text-anchor="middle">1</text>
+  <text class="f title" x="113" y="84">TRACE</text>
+  <text class="f note"  x="113" y="106">pauses here, holding the workload for stage 2</text>
+  <line class="divider" x1="470" y1="66" x2="470" y2="134"/>
+  <text class="f key" x="496" y="78">IN</text>  <text class="m val" x="540" y="78">Workloads/&lt;name&gt;.sh</text>
+  <text class="f key" x="496" y="104">RUN</text> <text class="m cmd" x="540" y="104">Tracer/run.sh &lt;name&gt;</text>
+  <text class="f key" x="496" y="130">OUT</text> <text class="m val" x="540" y="130">Data/&lt;name&gt;/drmemtrace.dir/</text>
 
-  <rect x="404" y="92" width="212" height="54" rx="10" fill="#fffbeb" stroke="#fde68a"/>
-  <text class="f env"  x="422" y="112" fill="#b45309">KVM HOST</text>
-  <text class="f flow" x="422" y="132">3  host page table</text>
+  <!-- ── 2 ── -->
+  <rect class="shadow" x="54" y="169" width="872" height="104" rx="11" filter="url(#sh)"/>
+  <rect class="card"   x="54" y="166" width="872" height="104" rx="11"/>
+  <rect class="badge"  x="74" y="184" width="27" height="27" rx="8"/>
+  <text class="f num"   x="87.5" y="202.5" text-anchor="middle">2</text>
+  <text class="f title" x="113" y="202">GUEST PAGE TABLE</text>
+  <text class="f note"  x="113" y="224">exists only while the traced process is alive</text>
+  <line class="divider" x1="470" y1="184" x2="470" y2="252"/>
+  <text class="f key" x="496" y="196">IN</text>  <text class="m val" x="540" y="196">/proc/page_tables</text>
+  <text class="f key" x="496" y="222">RUN</text> <text class="m cmd" x="540" y="222">PageTables/Guest/run.sh &lt;name&gt;</text>
+  <text class="f key" x="496" y="248">OUT</text> <text class="m val" x="540" y="248">Data/&lt;name&gt;/pt_dump.guest</text>
 
-  <rect x="642" y="92" width="282" height="54" rx="10" fill="#f6f8fb" stroke="#e2e8f0"/>
-  <text class="f env"  x="660" y="112" fill="#37517d">GUEST VM</text>
-  <text class="f flow" x="660" y="132">4  simulate</text>
+  <!-- ── transfer: guest → host ── -->
+  <circle class="arrowhead" cx="87.5" cy="292" r="2.1"/>
+  <path class="arrow" d="M87.5 292 L87.5 325" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text class="f xfer" x="113" y="313">copy <tspan class="m">pt_dump.guest</tspan> up to the KVM host</text>
 
-  <path d="M384 119 L398 119" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ar)"/>
-  <path d="M622 119 L636 119" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#ar)"/>
+  <!-- ════════════════ lane: KVM host, stage 3 ════════════════ -->
+  <rect class="laneH" x="36" y="334" width="908" height="160" rx="14"/>
+  <circle class="dotH" cx="59" cy="356" r="3.5"/>
+  <text class="f laneh" x="72" y="360">KVM HOST</text>
+  <text class="f span"  x="926" y="360" text-anchor="end">stage 3</text>
 
-  <!-- ══ 1 ══ -->
-  <rect x="56" y="186" width="868" height="140" rx="12" fill="#eef1f5"/>
-  <rect x="56" y="184" width="868" height="140" rx="12" fill="#fff" stroke="#e2e8f0"/>
-  <rect x="78" y="202" width="26" height="26" rx="7" fill="#37517d" fill-opacity="0.08"/>
-  <text class="f num" x="91" y="219" text-anchor="middle">1</text>
-  <text class="f st"  x="116" y="220">TRACE</text>
-  <rect x="838" y="203" width="66" height="19" rx="9.5" fill="#eef2f8"/>
-  <text class="f env" x="871" y="216" text-anchor="middle" fill="#37517d">GUEST</text>
-  <text class="f lb" x="78" y="256">IN</text>  <text class="m vl"  x="132" y="256">Workloads/&lt;name&gt;.sh</text>
-  <text class="f lb" x="78" y="282">RUN</text> <text class="m run" x="132" y="282">Tracer/run.sh &lt;name&gt;</text>
-  <text class="f lb" x="78" y="308">OUT</text> <text class="m vl"  x="132" y="308">Data/&lt;name&gt;/drmemtrace.dir/</text>
-  <text class="f nt" x="470" y="282">pauses here, holding the workload for stage 2</text>
+  <rect class="shadow" x="54" y="377" width="872" height="104" rx="11" filter="url(#sh)"/>
+  <rect class="cardH"  x="54" y="374" width="872" height="104" rx="11"/>
+  <rect class="badgeH" x="74" y="392" width="27" height="27" rx="8"/>
+  <text class="f numh"  x="87.5" y="410.5" text-anchor="middle">3</text>
+  <text class="f title" x="113" y="410">HOST PAGE TABLE</text>
+  <text class="f note"  x="113" y="432">also reads the live QEMU process, to resolve GPA → HPA</text>
+  <line class="divider" x1="470" y1="392" x2="470" y2="460"/>
+  <text class="f key" x="496" y="404">IN</text>  <text class="m val" x="540" y="404">pt_dump.guest</text>
+  <text class="f key" x="496" y="430">RUN</text> <text class="m cmd" x="540" y="430">PageTables/Host/run.sh ~/pt_dump.&lt;name&gt;</text>
+  <text class="f key" x="496" y="456">OUT</text> <text class="m val" x="540" y="456">pt_dump.host</text>
 
-  <!-- ══ 2 ══ -->
-  <rect x="56" y="342" width="868" height="140" rx="12" fill="#eef1f5"/>
-  <rect x="56" y="340" width="868" height="140" rx="12" fill="#fff" stroke="#e2e8f0"/>
-  <rect x="78" y="358" width="26" height="26" rx="7" fill="#37517d" fill-opacity="0.08"/>
-  <text class="f num" x="91" y="375" text-anchor="middle">2</text>
-  <text class="f st"  x="116" y="376">GUEST PAGE TABLE</text>
-  <rect x="838" y="359" width="66" height="19" rx="9.5" fill="#eef2f8"/>
-  <text class="f env" x="871" y="372" text-anchor="middle" fill="#37517d">GUEST</text>
-  <text class="f lb" x="78" y="412">IN</text>  <text class="m vl"  x="132" y="412">/proc/page_tables</text>
-  <text class="f lb" x="78" y="438">RUN</text> <text class="m run" x="132" y="438">PageTables/Guest/run.sh &lt;name&gt;</text>
-  <text class="f lb" x="78" y="464">OUT</text> <text class="m vl"  x="132" y="464">Data/&lt;name&gt;/pt_dump.guest</text>
-  <text class="f nt" x="470" y="412">exists only while the process is alive</text>
+  <!-- ── transfer: host → guest ── -->
+  <circle class="arrowhead" cx="87.5" cy="500" r="2.1"/>
+  <path class="arrow" d="M87.5 500 L87.5 533" stroke-width="1.6" marker-end="url(#ar)"/>
+  <text class="f xfer" x="113" y="521">copy <tspan class="m">pt_dump.host</tspan> back into <tspan class="m">Data/&lt;name&gt;/</tspan></text>
 
-  <!-- transfer up -->
-  <path d="M470 486 L470 508" stroke="#cbd5e1" stroke-width="1.4" marker-end="url(#ar)"/>
-  <text class="f xfer" x="486" y="503">copy <tspan class="m">pt_dump.guest</tspan> up to the host</text>
+  <!-- ════════════════ lane: guest VM, stage 4 ════════════════ -->
+  <rect class="laneG" x="36" y="542" width="908" height="160" rx="14"/>
+  <circle class="dotG" cx="59" cy="564" r="3.5"/>
+  <text class="f lane" x="72" y="568">GUEST VM</text>
+  <text class="f span" x="926" y="568" text-anchor="end">stage 4</text>
 
-  <!-- ══ 3 ══ -->
-  <rect x="56" y="518" width="868" height="140" rx="12" fill="#f3ece0"/>
-  <rect x="56" y="516" width="868" height="140" rx="12" fill="#fffdf7" stroke="#fde68a"/>
-  <rect x="78" y="534" width="26" height="26" rx="7" fill="#f59e0b" fill-opacity="0.16"/>
-  <text class="f numh" x="91" y="551" text-anchor="middle">3</text>
-  <text class="f st"   x="116" y="552">HOST PAGE TABLE</text>
-  <rect x="846" y="535" width="58" height="19" rx="9.5" fill="#fef3c7"/>
-  <text class="f env" x="875" y="548" text-anchor="middle" fill="#b45309">HOST</text>
-  <text class="f lb" x="78" y="588">IN</text>  <text class="m vl"  x="132" y="588">pt_dump.guest</text>
-  <text class="f nt" x="256" y="588">plus the running QEMU process</text>
-  <text class="f lb" x="78" y="614">RUN</text> <text class="m run" x="132" y="614">PageTables/Host/run.sh ~/pt_dump.&lt;name&gt;</text>
-  <text class="f lb" x="78" y="640">OUT</text> <text class="m vl"  x="132" y="640">pt_dump.host</text>
-
-  <!-- transfer back -->
-  <path d="M470 662 L470 684" stroke="#cbd5e1" stroke-width="1.4" marker-end="url(#ar)"/>
-  <text class="f xfer" x="486" y="679">copy <tspan class="m">pt_dump.host</tspan> back into <tspan class="m">Data/&lt;name&gt;/</tspan></text>
-
-  <!-- ══ 4 ══ -->
-  <rect x="56" y="694" width="868" height="140" rx="12" fill="#eef1f5"/>
-  <rect x="56" y="692" width="868" height="140" rx="12" fill="#fff" stroke="#e2e8f0"/>
-  <rect x="78" y="710" width="26" height="26" rx="7" fill="#37517d" fill-opacity="0.08"/>
-  <text class="f num" x="91" y="727" text-anchor="middle">4</text>
-  <text class="f st"  x="116" y="728">SIMULATE</text>
-  <rect x="838" y="711" width="66" height="19" rx="9.5" fill="#eef2f8"/>
-  <text class="f env" x="871" y="724" text-anchor="middle" fill="#37517d">GUEST</text>
-  <text class="f lb" x="78" y="764">IN</text>
-  <text class="m vl" x="132" y="764">drmemtrace.dir/</text>
-  <text class="m vl" x="286" y="764">pt_dump.guest</text>
-  <text class="m vl" x="426" y="764">pt_dump.host</text>
-  <text class="f lb" x="78" y="790">RUN</text> <text class="m run" x="132" y="790">Simulator/run_arm.sh ../Data/&lt;name&gt;</text>
-  <text class="f lb" x="78" y="816">OUT</text> <text class="m vl"  x="132" y="816">Results/&lt;name&gt;/analysis_arm.txt</text>
+  <rect class="shadow" x="54" y="585" width="872" height="104" rx="11" filter="url(#sh)"/>
+  <rect class="card"   x="54" y="582" width="872" height="104" rx="11"/>
+  <rect class="badge"  x="74" y="600" width="27" height="27" rx="8"/>
+  <text class="f num"   x="87.5" y="618.5" text-anchor="middle">4</text>
+  <text class="f title" x="113" y="618">SIMULATE</text>
+  <text class="f note"  x="113" y="640">needs all three inputs together</text>
+  <line class="divider" x1="470" y1="600" x2="470" y2="668"/>
+  <text class="f key" x="496" y="612">IN</text>
+  <text class="m val" x="540" y="612">drmemtrace.dir/<tspan class="sep">&#160;&#160;·&#160;&#160;</tspan>pt_dump.guest<tspan class="sep">&#160;&#160;·&#160;&#160;</tspan>pt_dump.host</text>
+  <text class="f key" x="496" y="638">RUN</text> <text class="m cmd" x="540" y="638">Simulator/run_arm.sh ../Data/&lt;name&gt;</text>
+  <text class="f key" x="496" y="664">OUT</text> <text class="m val" x="540" y="664">Results/&lt;name&gt;/analysis_arm.txt</text>
 </svg>
