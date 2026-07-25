@@ -85,7 +85,23 @@ paging and a ~1.25× SagePTE speedup.
 
 ### Capture a workload yourself
 
-Requires a QEMU/KVM host–guest pair. Inside the guest, in two terminals:
+Requires a QEMU/KVM host–guest pair, and key-based SSH from the guest to the
+host. From inside the guest, this is the whole capture:
+
+```bash
+./run.sh debug              # trace, both page tables, then simulate
+./run.sh redis both         # capture once, simulate arm and x86
+```
+
+`run.sh` drives all four stages, including the trip to the KVM host: it copies
+the guest page table up, runs the translation there over SSH, and brings the
+result back. Point it elsewhere with `--host`, `--host-user` and `--host-repo`.
+Every stage checks for its own output first, so an interrupted run is simply
+re-run; `--force` redoes a stage that already finished. Because the trace and
+the page tables do not depend on the modelled machine, naming a second
+architecture repeats only the simulation.
+
+The stages can equally be run by hand. Inside the guest, in two terminals:
 
 ```bash
 # terminal 1 — record the trace; it pauses partway through
