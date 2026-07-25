@@ -291,6 +291,21 @@ ui::ok "free space  $(numfmt --to=iec --suffix=B "${AVAIL_BYTES}" 2>/dev/null) a
 
 ui::step "Conversion"
 
+# A capture records the absolute path of every module loaded at the time. If
+# the artifact has since moved, or the capture was made elsewhere, raw2trace
+# stops on the first one it cannot open. Repoint any that resolve to this
+# checkout before starting; see Tracer/scripts/relocate_modules.py.
+RELOCATOR="${SCRIPT_DIR}/scripts/relocate_modules.py"
+if [[ -x "${RELOCATOR}" && -f "${TRACE_DIR}/raw/modules.log" ]]; then
+  while IFS= read -r line; do
+    case "${line}" in
+      relocated\ *)  ui::ok   "module repointed  ${line#relocated }" ;;
+      unresolved\ *) ui::warn "module not found here: ${line#unresolved }" ;;
+    esac
+  done < <("${RELOCATOR}" "${TRACE_DIR}/raw/modules.log" "${REPO_ROOT}" 2> /dev/null || true)
+fi
+
+
 CONVERT_LOG="${OUTPUT_DIR:-$(dirname "${TRACE_DIR}")}/meta/raw2trace.log"
 mkdir -p "$(dirname "${CONVERT_LOG}")"
 started=${SECONDS}

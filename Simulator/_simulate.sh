@@ -405,6 +405,18 @@ if [[ -s "${TRACE_FILE}" ]]; then
   ui::ok "decoded trace  $(ui::size_of "${TRACE_FILE}")"
 else
   DECODED_AT_START=0
+  # The decode reads every module the capture recorded by absolute path. If the
+  # artifact has moved since, repoint the ones that resolve to this checkout,
+  # exactly as Tracer/convert_trace.sh does before its own decode.
+  RELOCATOR="${REPO_ROOT}/Tracer/scripts/relocate_modules.py"
+  if [[ -x "${RELOCATOR}" && -f "${TRACE}/raw/modules.log" ]]; then
+    while IFS= read -r line; do
+      case "${line}" in
+        relocated\ *)  ui::ok   "module repointed  ${line#relocated }" ;;
+        unresolved\ *) ui::warn "module not found here: ${line#unresolved }" ;;
+      esac
+    done < <("${RELOCATOR}" "${TRACE}/raw/modules.log" "${REPO_ROOT}" 2> /dev/null || true)
+  fi
   ui::warn "the trace is not decoded yet — the simulator will decode it first"
   ui::note "this is a one-off cost of roughly ${DECODE_EXPANSION}x the raw capture" \
     ""
