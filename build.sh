@@ -100,7 +100,7 @@ ONLY=()               # when non-empty, build only these components
 SKIP=()               # never build these components
 
 # The component list, in dependency order. Selection preserves this order.
-readonly ALL_COMPONENTS=(deps tracer simulator workloads guest-pt host-pt)
+readonly ALL_COMPONENTS=(deps system tracer simulator workloads guest-pt host-pt)
 
 # Populated as the run progresses; read by the summary and the trap handler.
 declare -A RESULT=()          # component -> ok | skipped | failed
@@ -216,6 +216,7 @@ EOF
 list_components() {
   ui::banner "Build components" "in dependency order; select with --only / --skip"
   ui::field "deps"      "Ubuntu packages and the gcc-7 toolchain"
+  ui::field "system"    "disable transparent huge pages, drop the page cache"
   ui::field "tracer"    "Tracer/build/bin64/drrun"
   ui::field "simulator" "Simulator/build/bin64/drrun"
   ui::field "workloads" "Workloads/bin/bench_*"
@@ -714,6 +715,37 @@ step_deps() {
 }
 
 #######################################
+# Put the machine into the state the measurements assume: no transparent huge
+# pages, and a cold page cache. Not a build step in any real sense, but it
+# belongs to getting a machine ready, and a capture taken without it measures
+# something other than what the paper reports.
+#######################################
+step_system() {
+  ui::step "System"
+
+  local prep="${REPO_ROOT}/scripts/prepare_system.sh"
+  if [[ ! -x "${prep}" ]]; then
+    ui::warn "scripts/prepare_system.sh is missing; skipping"
+    record system skipped "script missing"
+    return 0
+  fi
+
+  if (( EUID != 0 )) && ! have sudo; then
+    ui::warn "cannot prepare the system: not root, and sudo is unavailable"
+    ui::note "run scripts/prepare_system.sh as root before capturing"
+    record system skipped "no privilege"
+    return 0
+  fi
+
+  ${SUDO:-} "${prep}" || {
+    ui::warn "system preparation did not complete"
+    record system skipped "preparation failed"
+    return 0
+  }
+  record system ok "THP disabled, caches dropped"
+}
+
+#######################################
 # Build the tracer.
 #######################################
 step_tracer() {
@@ -999,6 +1031,7 @@ for component in "${ALL_COMPONENTS[@]}"; do
   CURRENT_COMPONENT="${component}"
   case "${component}" in
     deps)      step_deps      || STATUS=3 ;;
+    system)    step_system    || STATUS=3 ;;
     tracer)    step_tracer    || STATUS=3 ;;
     simulator) step_simulator || STATUS=3 ;;
     workloads) step_workloads || STATUS=3 ;;

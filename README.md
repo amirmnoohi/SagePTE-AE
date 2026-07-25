@@ -208,6 +208,7 @@ arguments and readiness signal, and it is immediately runnable as
 | Capture | a QEMU/KVM host–guest pair, kernel headers, root in both |
 | Guest kernel | **Linux 5.15.** The `/proc/page_tables` module reads `kvm_mmu` fields (`shadow_root_level`, `direct_map`) that later kernels removed; it does not build on 6.8 |
 | Host kernel | **Linux ≥ 6.1.** The GPA→HPA module uses the maple-tree VMA iterators (`VMA_ITERATOR`, `for_each_vma`), added in that release |
+| THP | **disabled on both machines.** Host THP backs guest RAM with 2 MB pages, which ends the Stage-2 walk a level early and makes the h-final phase cheaper than the modelled hardware. `build.sh` sets it in the guest; `run.sh` sets both |
 | Disk | ~130 GB per workload: the Redis capture is 20 GB and decodes to 106 GB |
 
 `./build.sh` installs the toolchain on Ubuntu and then builds everything;

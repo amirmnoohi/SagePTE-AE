@@ -213,6 +213,65 @@ push_host_code() {
 }
 
 #######################################
+# Put both machines into the state the measurements assume: no transparent
+# huge pages, and a cold page cache.
+#
+# The host matters most. Its THP setting decides how deep the terminal Stage-2
+# walk is, because guest RAM backed by 2 MB pages ends the walk a level early
+# and makes the h-final phase cheaper than the hardware being modelled would.
+# khugepaged also collapses while the guest runs, so leaving it enabled makes
+# the result depend on how long the VM has been up.
+# Globals:
+#   Reads REPO_ROOT, HOST, HOST_USER.
+#######################################
+ensure_prepared() {
+  local prep="${REPO_ROOT}/scripts/prepare_system.sh"
+
+  # --- this guest -----------------------------------------------------------
+  if [[ -x "${prep}" ]]; then
+    if ! "${prep}" --check > /dev/null 2>&1; then
+      ${SUDO:-} "${prep}" > /dev/null 2>&1 || true
+    fi
+    if "${prep}" --check > /dev/null 2>&1; then
+      ui::ok "guest prepared  transparent huge pages disabled"
+    else
+      ui::warn "guest still reports transparent huge pages enabled"
+      ui::note "run scripts/prepare_system.sh as root here"
+    fi
+  fi
+
+  # --- the KVM host ---------------------------------------------------------
+  local mode
+  mode="$(on_host 'sed -n "s/.*\[\([a-z+]*\)\].*/\1/p" /sys/kernel/mm/transparent_hugepage/enabled' 2> /dev/null || true)"
+  if [[ "${mode}" != never ]]; then
+    ui::info "host: transparent huge pages are '\''${mode:-unknown}'\''; disabling"
+    on_host 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null;
+             echo never > /sys/kernel/mm/transparent_hugepage/defrag  2>/dev/null;
+             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null' > /dev/null 2>&1 || true
+    mode="$(on_host 'sed -n "s/.*\[\([a-z+]*\)\].*/\1/p" /sys/kernel/mm/transparent_hugepage/enabled' 2> /dev/null || true)"
+  fi
+  if [[ "${mode}" == never ]]; then
+    ui::ok "host prepared  transparent huge pages disabled"
+  else
+    ui::warn "host transparent huge pages are '\''${mode:-unknown}'\''"
+    ui::note "the host page table will record 2 MB mappings and the walk will be short"
+  fi
+
+  # Disabling THP stops new collapses but splits nothing already collapsed, so
+  # a guest whose RAM is on huge pages stays that way until it restarts. That
+  # is measurable, so it is reported rather than assumed away.
+  local huge
+  huge="$(on_host 'q=$(pgrep -f "qemu-system|qemu-kvm" | head -1);
+                   [ -n "$q" ] && awk "/^AnonHugePages:/ {print \$2}" /proc/$q/smaps_rollup 2>/dev/null || echo 0' 2> /dev/null || echo 0)"
+  huge="${huge//[^0-9]/}"
+  if (( ${huge:-0} > 0 )); then
+    ui::warn "this guest already holds $(ui::bytes $(( huge * 1024 ))) of host huge pages"
+    ui::note "they were collapsed before THP was disabled and persist until the VM restarts"
+    ui::note "restart the VM for a capture that measures a full-depth host walk"
+  fi
+}
+
+#######################################
 # Read one field out of the tracer's state file.
 # Arguments:
 #   $1 — key; $2 — state file path.
@@ -523,6 +582,8 @@ if [[ "${HOST_KERNEL}" =~ ^([0-9]+)\.([0-9]+) ]] &&
 else
   ui::ok "host kernel  ${HOST_KERNEL}"
 fi
+
+ensure_prepared
 
 ui::field "simulate"  "${ARCHES[*]}"
 ui::field "capture"   "$(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}")"
