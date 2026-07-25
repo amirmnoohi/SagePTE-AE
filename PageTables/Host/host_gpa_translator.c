@@ -26,6 +26,7 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/mm.h>
+#include <linux/version.h>
 #include <linux/pid.h>
 #include <linux/pgtable.h>
 #include <linux/vmalloc.h>
@@ -96,14 +97,23 @@ static int find_guest_ram_base(struct mm_struct *mm)
 	unsigned long max_size = 0;
 	unsigned long base = 0;
 	unsigned long size = 0;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	VMA_ITERATOR(vmi, mm, 0);
+#endif
 
 	if (!mm)
 		return -EINVAL;
 
 	mmap_read_lock(mm);
 
+	/* Linux 6.1 replaced the mm->mmap list with a maple tree. The selection
+	 * below is the original's, unchanged; only the way the VMAs are reached
+	 * differs, because the list does not exist on newer kernels. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	for_each_vma(vmi, vma) {
+#else
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
+#endif
 		if (!vma->vm_file && (vma->vm_flags & VM_READ) && (vma->vm_flags & VM_WRITE)) {
 			unsigned long vma_size = vma->vm_end - vma->vm_start;
 			
@@ -209,7 +219,18 @@ static int translate_gpa_to_hpa(struct mm_struct *mm, unsigned long gpa, unsigne
 	if (pmd_bad(*pmd))
 		return -EFAULT;
 
-	// Regular 4KB page
+	/* Regular 4KB page.
+	 *
+	 * pte_offset_map() is the right call and is what this walk used
+	 * originally, but Linux 6.5 reimplemented it on top of
+	 * __pte_offset_map(), which is not exported to modules: linking fails
+	 * with "__pte_offset_map undefined". pte_offset_kernel() computes the
+	 * same address, and is safe here only because every non-page-table pmd
+	 * has already been rejected above -- pmd_none, pmd_leaf and pmd_bad are
+	 * all checked before this point, which is exactly what pte_offset_map()
+	 * would have caught by returning NULL.
+	 */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
 	pte = pte_offset_kernel(pmd, qemu_va);
 	if (!pte)
 		return -EFAULT;
@@ -220,6 +241,21 @@ static int translate_gpa_to_hpa(struct mm_struct *mm, unsigned long gpa, unsigne
 	pfn = pte_pfn(*pte);
 	*chain_pfn5 = pfn;
 	*hpa = (pfn << PAGE_SHIFT) | page_offset;
+#else
+	pte = pte_offset_map(pmd, qemu_va);
+	if (!pte)
+		return -EFAULT;
+
+	if (pte_none(*pte) || !pte_present(*pte)) {
+		pte_unmap(pte);
+		return -EFAULT;
+	}
+
+	pfn = pte_pfn(*pte);
+	*chain_pfn5 = pfn;
+	*hpa = (pfn << PAGE_SHIFT) | page_offset;
+	pte_unmap(pte);
+#endif
 
 	return 0;
 }
@@ -885,7 +921,7 @@ static int output_show(struct seq_file *m, void *v)
 	 * the table with no error reported.
 	 */
 	if (v == (void *)1) {
-		seq_printf(m, "%lu\n", entry_count);
+		seq_printf(m, "%d\n", guest_pid);
 		return 0;
 	}
 
