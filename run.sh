@@ -67,6 +67,17 @@
 #
 # ==============================================================================
 
+# Bash reads a script incrementally, executing each command as it is parsed, so
+# a script that is edited — or pulled — while it is running continues reading
+# from a byte offset into a file whose contents have moved underneath it. What
+# it finds there is a fragment of some other line, and the result is a run that
+# fails in a way bearing no relation to the code ("-o: command not found" at a
+# blank line). A capture takes hours, which is ample time for a git pull.
+#
+# Wrapping the body in a brace group forces the whole file to be parsed before
+# any of it runs, so an edit mid-run cannot affect the run in flight.
+{
+
 set -euo pipefail
 
 readonly VERSION="1.0.0"
@@ -734,3 +745,5 @@ for arch in "${ARCHES[@]}"; do
   ui::field "analysis ${arch}" "Results/${WORKLOAD}/analysis_${arch}.txt"
 done
 ui::blank
+
+}
