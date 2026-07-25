@@ -6,11 +6,20 @@
 ./run.sh redis
 ```
 
-That is the whole evaluation. It builds the artifact if it has not been built,
-traces the workload, captures the guest page table, produces the host page
-table over SSH on the KVM host, decodes the trace, simulates it, and writes the
-parsed result to `Results/redis/`. Nothing else needs to be run, and no step
-needs to be supervised.
+That is the whole evaluation. In order, it:
+
+1. **Builds** the artifact, if it has not been built already
+2. **Traces** the workload, starting the recording once the workload has loaded
+   its working set — *1 h 45 m for Redis*
+3. **Captures** the guest page table (GVA→GPA) while the workload is held — *15 s*
+4. **Translates** it to host-physical addresses over SSH on the KVM host
+   (GPA→HPA) — *2 h 20 m*
+5. **Decodes** the raw capture into the form the simulator reads — *11 min*
+6. **Simulates** it and writes the parsed result to
+   `Results/redis/analysis_x86.txt` — *2.5 h*
+
+Nothing else needs to be run, and no step needs to be supervised. The times are
+what each stage took for Redis on our evaluation machine.
 
 Substitute any workload from `./run.sh --list`, and add `arm` or `both` to
 simulate a different machine (`x86` is the default). Every stage checks for its
