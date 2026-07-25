@@ -32,6 +32,12 @@ point it at yours. Allow roughly seven hours for Redis, of which four are the
 capture. To skip the capture and simulate the published dataset instead, see
 [Simulate an existing dataset](#simulate-an-existing-dataset).
 
+> **Reviewers: you do not have to set any of this up.** Ask us through HotCRP
+> and we will give you access to our evaluation server, where the artifact is
+> already installed, the guest–host pair is already configured, and the
+> captured inputs are already in place. `./run.sh redis` then works
+> immediately. This is the fastest path, and the one we recommend.
+
 ---
 
 Evaluation artifact for **SagePTE**, a virtual-memory design for virtualized
