@@ -70,3 +70,22 @@ post_start() {
 post_run() {
     :
 }
+
+# ---------------------------------------------------------------------------
+# Progress reporting (optional)
+# ---------------------------------------------------------------------------
+# Initialisation is the longest silent part of a capture, and an elapsed
+# counter alone reads as a hang. If the workload reveals how far it has got —
+# typically by printing to the tracer log, available here as ${TRACER_LOG} —
+# report it, and the wait becomes a percentage with an ETA.
+#
+# Print "<done> <total> [unit...]" in any consistent unit, or nothing at all
+# when there is not yet anything to report. See Workloads/redis.sh.
+#
+# ready_progress() {
+#   local line done total
+#   line="$(grep -o 'Key [0-9]\+ M / [0-9]\+ M' "${TRACER_LOG}" 2>/dev/null | tail -1)"
+#   [[ -n "${line}" ]] || return 0
+#   read -r _ done _ _ total _ <<< "${line}"
+#   printf '%s %s M keys' "${done}" "${total}"
+# }

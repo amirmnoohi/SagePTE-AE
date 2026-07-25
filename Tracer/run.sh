@@ -307,6 +307,71 @@ parked_signature() {
   printf '%s %s' "${cpu}" "${bytes:-0}"
 }
 
+# Anchor for the initialisation ETA: the first sample seen, so the rate is
+# measured from real progress rather than from a start that included process
+# launch.
+_READY_HAVE=0
+_READY_T0=0
+_READY_V0=0
+_READY_LAST=0
+
+#######################################
+# The label for the readiness progress line, with a percentage and an ETA when
+# the workload can say how far it has got.
+#
+# Initialisation is the longest silent stretch of a capture — Redis spends an
+# hour and three quarters inserting 512 million keys before a single reference
+# is recorded — and an elapsed counter on its own is indistinguishable from a
+# hang. A definition may override ready_progress() to print
+#
+#     <done> <total> [unit...]
+#
+# in any consistent unit, and this turns consecutive samples into a percentage
+# and a projected finish. The rate is averaged over the whole wait rather than
+# taken between adjacent samples, which would jitter with every log flush.
+# The result is left in READY_LABEL rather than written to stdout, because the
+# anchor has to survive between calls: read through $(...) the function would
+# run in a subshell, every call would re-anchor on its own reading, and the
+# elapsed-since-anchor would be zero forever, so the ETA branch could never be
+# taken.
+# Globals:
+#   Reads and writes _READY_HAVE, _READY_T0, _READY_V0, _READY_LAST;
+#   sets READY_LABEL.
+#######################################
+readiness_label() {
+  local done total unit elapsed remain
+
+  READY_LABEL="waiting for the workload to finish initialising"
+
+  read -r done total unit <<< "$(ready_progress 2>/dev/null || true)"
+  [[ "${done}" =~ ^[0-9]+$ && "${total}" =~ ^[0-9]+$ ]] || return 0
+  (( total > 0 && done <= total )) || return 0
+
+  # First reading, or a restart that moved the counter backwards.
+  # A separate flag rather than a zero sentinel on _READY_T0, which a run that
+  # reached this stage within a second of starting would collide with.
+  # Compared against the previous reading, not against the anchor: a counter
+  # that restarts is still above an anchor of zero, and the rate computed
+  # across the restart would be nonsense.
+  if (( ! _READY_HAVE || done < _READY_LAST )); then
+    _READY_HAVE=1
+    _READY_T0=${SECONDS}
+    _READY_V0=${done}
+  fi
+  _READY_LAST=${done}
+
+  elapsed=$(( SECONDS - _READY_T0 ))
+  if (( done > _READY_V0 && elapsed > 0 )); then
+    remain=$(( (total - done) * elapsed / (done - _READY_V0) ))
+    printf -v READY_LABEL 'building the working set  %s/%s%s  %s%%  ETA %s' \
+      "${done}" "${total}" "${unit:+ ${unit}}" \
+      "$(( done * 100 / total ))" "$(ui::duration "${remain}")"
+  else
+    printf -v READY_LABEL 'building the working set  %s/%s%s  %s%%' \
+      "${done}" "${total}" "${unit:+ ${unit}}" "$(( done * 100 / total ))"
+  fi
+}
+
 # ==============================================================================
 #  Environment
 # ==============================================================================
@@ -501,6 +566,9 @@ REQUIRES=""
 pre_run()    { :; }
 post_start() { :; }
 post_run()   { :; }
+# Overridden by definitions that can report how far initialisation has got. See
+# readiness_label() for the contract and Workloads/redis.sh for an example.
+ready_progress() { :; }
 
 # shellcheck source=/dev/null
 source "${WORKLOAD_FILE}"
@@ -666,7 +734,9 @@ if [[ -n "${READY_FILE}" ]]; then
   ui::wait_begin "waiting for the workload to finish initialising"
   while kill -0 "${TRACER_PID}" 2>/dev/null && [[ ! -s "${READY_FILE}" ]]; do
     sleep 1
-    ui::wait_tick
+    # readiness_label() sets READY_LABEL in this shell; see the note there.
+    readiness_label
+    ui::wait_tick "${READY_LABEL}"
   done
 
   if ! kill -0 "${TRACER_PID}" 2>/dev/null; then
