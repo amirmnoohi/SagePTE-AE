@@ -99,7 +99,7 @@ source "${REPO_ROOT}/Lib/ui.sh"
 HOST="192.168.122.1"     # the KVM host, as seen from inside this guest
 HOST_USER="root"
 HOST_REPO=""             # default: discovered on the host, see find_host_repo
-ARCHES=()                # simulator configurations to run; default: arm
+ARCHES=()                # simulator configurations to run; default: x86
 readonly KNOWN_ARCHES=(arm x86)
 OUTPUT_DIR=""            # default: Data/<workload>
 FREEZE=1                 # 1 = hold the workload while its page table is read
@@ -142,7 +142,7 @@ ${C_BOLD}USAGE${C_RESET}
 
 ${C_BOLD}ARGUMENTS${C_RESET}
   workload       a name from ./${PROG} --list
-  arch           arm, x86, or both        (default: arm, the paper's machine)
+  arch           arm, x86, or both        (default: x86)
 
   Order does not matter — arm, x86 and both are recognised wherever they
   appear. Naming both simulates the same capture twice: stages 1-4 produce the
@@ -168,10 +168,10 @@ ${C_BOLD}OPTIONS${C_RESET}
   -V, --version          show the version
 
 ${C_BOLD}EXAMPLES${C_RESET}
-  ./${PROG} debug                    smoke-test the whole pipeline (arm)
+  ./${PROG} debug                    smoke-test the whole pipeline
   ./${PROG} redis                    the paper's configuration
-  ./${PROG} gups x86                 simulate the x86 machine instead
-  ./${PROG} redis both               capture once, simulate arm and x86
+  ./${PROG} gups arm                 simulate the ARM machine instead
+  ./${PROG} redis both               capture once, simulate both machines
 
 ${C_BOLD}REQUIRES${C_RESET}
   Key-based SSH from this guest to ${HOST_USER}@${HOST}, and the artifact
@@ -419,7 +419,7 @@ done
 
 [[ -n "${WORKLOAD}" ]] || { usage; exit 1; }
 
-(( ${#ARCHES[@]} > 0 )) || ARCHES=(arm)
+(( ${#ARCHES[@]} > 0 )) || ARCHES=(x86)
 for _a in "${ARCHES[@]}"; do
   [[ " ${KNOWN_ARCHES[*]} " == *" ${_a} "* ]] ||
     UI_EXIT_CODE=1 ui::die "unknown architecture: ${_a}" \
