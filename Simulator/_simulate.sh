@@ -216,37 +216,23 @@ resolve_dumps() {
 #   0 when found, 1 otherwise.
 #######################################
 find_reader() {
-  local pid fd target
+  local pid fd target mode
   for pid in $(pgrep -x drcachesim 2> /dev/null); do
     for fd in /proc/"${pid}"/fd/*; do
       target="$(readlink "${fd}" 2> /dev/null)" || continue
-      if [[ "${target}" == "${TRACE_FILE}" ]]; then
-        printf '%s %s' "${pid}" "${fd##*/}"
-        return 0
-      fi
+      [[ "${target}" == "${TRACE_FILE}" ]] || continue
+      # While decoding, the very same process holds this file open for
+      # *writing*: that descriptor's position is where raw2trace is appending,
+      # which sits at the end of the file and would read as a replay that is
+      # permanently 99% done. Only a read-only descriptor is a replay. The
+      # flags in fdinfo are octal, and the low two bits are the access mode.
+      mode="$(sed -n 's/^flags:[[:space:]]*//p' "/proc/${pid}/fdinfo/${fd##*/}" 2> /dev/null)"
+      (( (8#${mode:-1} & 3) == 0 )) || continue
+      printf '%s %s' "${pid}" "${fd##*/}"
+      return 0
     done
   done
   return 1
-}
-
-#######################################
-# Render one progress line: a bar, how far through, and an estimate.
-# Arguments:
-#   $1 — verb ("replaying"/"decoding"); $2 — bytes done; $3 — bytes total;
-#   $4 — bytes per second, 0 when not yet known.
-# Outputs:
-#   The label on stdout, for ui::wait_tick.
-#######################################
-progress_label() {
-  local verb="$1" done_b="$2" total_b="$3" rate="$4"
-  local pct=0 eta=""
-  (( total_b > 0 )) && pct=$(( done_b * 100 / total_b ))
-  if (( rate > 0 && total_b > done_b )); then
-    eta="  ${C_DIM}ETA $(ui::duration $(( (total_b - done_b) / rate )))${C_RESET}"
-  fi
-  printf '%s %3d%%  %s  %s / %s%s' \
-    "${verb}" "${pct}" "$(ui::bar "${pct}" 20)" \
-    "$(ui::bytes "${done_b}")" "$(ui::bytes "${total_b}")" "${eta}"
 }
 
 #######################################
@@ -293,7 +279,7 @@ watch_simulation() {
       last_time=${now}
     fi
 
-    ui::wait_tick "$(progress_label "${verb}" "${pos}" "${total}" "${rate}")"
+    ui::wait_tick "$(ui::progress "${verb}" "${pos}" "${total}" "${rate}")"
     sleep 1
   done
 }

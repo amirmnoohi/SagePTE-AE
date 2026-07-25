@@ -15,7 +15,13 @@
 #          1  memory trace                     here, in the guest
 #          2  guest page table (GVA->GPA)      here, in the guest
 #          3  host page table  (GPA->HPA)      on the KVM host, over SSH
-#          4  simulation                       here, in the guest
+#          4  decode the capture (raw2trace)   here, in the guest
+#          5  simulation                       here, in the guest
+#
+#      The decode is a stage of its own rather than something the simulator
+#      does on the way in. It is hours of work on a full capture, and folded
+#      into the simulation it is reported as simulating — with a progress bar
+#      measuring the wrong thing.
 #
 #      Stage 3 is the reason this script exists. The host page table can only
 #      be produced on the KVM host, from a dump made inside the guest, while
@@ -93,10 +99,17 @@ TRACE_TIMEOUT=7200       # seconds to wait for recording to start
 # 155 GB working set again, while re-simulating only replays an existing trace.
 FORCE_CAPTURE=0          # trace + guest page table (they are captured together)
 FORCE_HOST=0             # host page table
+FORCE_DECODE=0           # raw2trace decode of the capture
 FORCE_SIM=0              # the simulation and its analysis
 
+# One multiplexed connection for the whole run. Progress is reported by asking
+# the host how large the file it is receiving has become, which would otherwise
+# mean a fresh SSH handshake every couple of seconds.
+readonly SSH_CTL_DIR="${TMPDIR:-/tmp}/sagepte-ssh-$$"
 readonly SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new
-                   -o ConnectTimeout=10)
+                   -o ConnectTimeout=10
+                   -o ControlMaster=auto -o "ControlPath=${SSH_CTL_DIR}/%r@%h:%p"
+                   -o ControlPersist=120)
 
 # Populated as the run progresses; referenced by the trap handler.
 WORKLOAD=""
@@ -134,7 +147,7 @@ ${C_BOLD}OPTIONS${C_RESET}
       --no-freeze        do not pause the workload during the snapshot
   -f, --force [STAGES]   discard existing output and redo it. With no argument
                          this means everything; otherwise a comma-separated
-                         list of: capture, host-pt, sim
+                         list of: capture, host-pt, decode, sim
                            --force sim        re-simulate an existing capture
                            --force host-pt    redo just the host translation
                            --force capture    re-trace from scratch
@@ -222,7 +235,27 @@ capture_progress() {
 }
 
 #######################################
+# Size of a file on the host, 0 when it does not exist yet.
+# Arguments:
+#   $1 — remote path.
+#######################################
+remote_size() {
+  on_host "stat -c %s '$1' 2> /dev/null || echo 0" 2> /dev/null | tr -cd '0-9' || echo 0
+}
+
+#######################################
+# Size of a local file, 0 when absent.
+#######################################
+local_size() { stat -c %s "$1" 2> /dev/null || echo 0; }
+
+#######################################
 # Run a command with its output captured, showing a live progress line.
+#
+# With a total and a way to measure what is done, the line carries a bar and an
+# estimate; without them it carries the label and the elapsed time. Nothing
+# here invents a completion figure for work whose size is not known in advance.
+# Globals:
+#   Reads PROBE_CMD and PROBE_TOTAL when set, to measure progress.
 # Arguments:
 #   $1 — label; $2 — log path; $3… — the command.
 # Returns:
@@ -231,13 +264,25 @@ capture_progress() {
 run_logged() {
   local label="$1" log="$2"
   shift 2
-  local rc=0 pid
+  local rc=0 pid done=0 last=0 last_t=${SECONDS} rate=0 now delta
   ui::wait_begin "${label}"
   "$@" >> "${log}" 2>&1 &
   pid=$!
   while kill -0 "${pid}" 2> /dev/null; do
-    ui::wait_tick "${label}"
-    sleep 0.5
+    if [[ -n "${PROBE_CMD:-}" ]] && (( ${PROBE_TOTAL:-0} > 0 )); then
+      done="$(${PROBE_CMD})"
+      now=${SECONDS}
+      delta=$(( now - last_t ))
+      if (( delta >= 4 )); then
+        (( done > last )) && rate=$(( (done - last) / delta ))
+        last=${done}
+        last_t=${now}
+      fi
+      ui::wait_tick "$(ui::progress "${label}" "${done}" "${PROBE_TOTAL}" "${rate}")"
+    else
+      ui::wait_tick "${label}"
+    fi
+    sleep 2
   done
   wait "${pid}" || rc=$?
   (( rc == 0 )) && ui::wait_end "${label}" || ui::wait_abort
@@ -262,6 +307,18 @@ stage_failed() {
   ui::note "full log: $(ui::relpath "${log}" "${REPO_ROOT}")"
   ui::result_banner fail "PIPELINE FAILED ${G_DOT} ${WORKLOAD}"
   exit 3
+}
+
+#######################################
+# Release everything this script holds: the frozen workload, and the shared SSH
+# connection. Safe to call more than once.
+#######################################
+cleanup() {
+  thaw
+  if [[ -d "${SSH_CTL_DIR}" ]]; then
+    ssh "${SSH_OPTS[@]}" -O exit "${HOST_USER}@${HOST}" 2> /dev/null || true
+    rm -rf "${SSH_CTL_DIR}"
+  fi
 }
 
 #######################################
@@ -310,7 +367,7 @@ while (( $# > 0 )); do
     -f | --force)
       # The argument is optional, so it is only consumed when it names stages
       # rather than being the workload or another flag.
-      if [[ "${2:-}" =~ ^(all|capture|trace|guest-pt|host-pt|sim)(,(all|capture|trace|guest-pt|host-pt|sim))*$ ]]; then
+      if [[ "${2:-}" =~ ^(all|capture|trace|guest-pt|host-pt|decode|sim)(,(all|capture|trace|guest-pt|host-pt|decode|sim))*$ ]]; then
         _stages="$2"; shift 2
       else
         _stages="all"; shift
@@ -318,12 +375,13 @@ while (( $# > 0 )); do
       IFS=',' read -r -a _list <<< "${_stages}"
       for _s in "${_list[@]}"; do
         case "${_s}" in
-          all)                       FORCE_CAPTURE=1; FORCE_HOST=1; FORCE_SIM=1 ;;
+          all)                       FORCE_CAPTURE=1; FORCE_HOST=1; FORCE_DECODE=1; FORCE_SIM=1 ;;
           # The guest page table is captured during the trace, so neither can
           # be redone alone; and a new capture invalidates the host table
           # derived from it.
-          capture | trace | guest-pt) FORCE_CAPTURE=1; FORCE_HOST=1 ;;
+          capture | trace | guest-pt) FORCE_CAPTURE=1; FORCE_HOST=1; FORCE_DECODE=1 ;;
           host-pt)                   FORCE_HOST=1 ;;
+          decode)                    FORCE_DECODE=1 ;;
           sim)                       FORCE_SIM=1 ;;
         esac
       done
@@ -368,13 +426,14 @@ readonly HOST_PT="${OUTPUT_DIR}/pt_dump.host"
 # ==============================================================================
 
 trap on_interrupt INT TERM
-trap thaw EXIT
+trap cleanup EXIT
 
 RUN_START=${SECONDS}
 mkdir -p "${LOG_DIR}"
+mkdir -p "${SSH_CTL_DIR}" && chmod 700 "${SSH_CTL_DIR}"
 
-# Four capture stages, then one simulation per machine being modelled.
-ui::set_steps $(( 4 + ${#ARCHES[@]} ))
+# Five capture stages, then one simulation per machine being modelled.
+ui::set_steps $(( 5 + ${#ARCHES[@]} ))
 ui::banner "SagePTE ${G_DOT} End-to-end pipeline" \
   "${WORKLOAD} ${G_DOT} ${ARCHES[*]} ${G_DOT} capture here, translate on the host, then simulate"
 
@@ -512,9 +571,24 @@ else
 
   # Let the trace finish; it stops itself at the reference limit.
   if [[ -n "${TRACER_PID}" ]]; then
+    # No ETA here on purpose: the trace ends at a reference count, not at a
+    # size, so nothing on disk predicts when it stops. Rate and total written
+    # are what can honestly be shown.
     ui::wait_begin "finishing the trace"
+    tr_last=0 tr_last_t=${SECONDS} tr_rate=0
     while kill -0 "${TRACER_PID}" 2> /dev/null; do
-      ui::wait_tick "finishing the trace  ${C_DIM}$(ui::size_of "${OUTPUT_DIR}")${C_RESET}"
+      tr_now="$(du -sb "${OUTPUT_DIR}" 2> /dev/null | cut -f1)"
+      tr_now="${tr_now:-0}"
+      tr_delta=$(( SECONDS - tr_last_t ))
+      if (( tr_delta >= 4 )); then
+        (( tr_now > tr_last )) && tr_rate=$(( (tr_now - tr_last) / tr_delta ))
+        tr_last=${tr_now}; tr_last_t=${SECONDS}
+      fi
+      if (( tr_rate > 0 )); then
+        ui::wait_tick "finishing the trace  ${C_DIM}$(ui::bytes "${tr_now}") at $(ui::bytes "${tr_rate}")/s${C_RESET}"
+      else
+        ui::wait_tick "finishing the trace  ${C_DIM}$(ui::bytes "${tr_now}")${C_RESET}"
+      fi
       sleep 2
     done
     trace_rc=0
@@ -553,24 +627,65 @@ else
 
   on_host "mkdir -p '${REMOTE_DIR}'" >> "${HOST_LOG}" 2>&1
 
-  run_logged "uploading the guest page table ($(ui::size_of "${GUEST_PT}"))" "${HOST_LOG}" \
-    scp "${SSH_OPTS[@]}" -q "${GUEST_PT}" "${HOST_USER}@${HOST}:${REMOTE_DIR}/pt_dump.guest" ||
+  # Upload: the total is the local file, and the host reports what has landed.
+  probe_upload() { remote_size "${REMOTE_DIR}/pt_dump.guest"; }
+  PROBE_CMD=probe_upload PROBE_TOTAL="$(local_size "${GUEST_PT}")" \
+    run_logged "uploading the guest page table" "${HOST_LOG}" \
+      scp "${SSH_OPTS[@]}" -q "${GUEST_PT}" "${HOST_USER}@${HOST}:${REMOTE_DIR}/pt_dump.guest" ||
     stage_failed "the upload to ${HOST}" "${HOST_LOG}"
 
   # PageTables/Host/run.sh loads its own module and runs the augmentor; it
   # needs the guest to still be running, which it is — we are inside it.
-  run_logged "translating GPA -> HPA on ${HOST}" "${HOST_LOG}" \
-    on_host "cd '${HOST_REPO}' && ./PageTables/Host/run.sh '${REMOTE_DIR}/pt_dump.guest' \
-             --output '${REMOTE_DIR}/pt_dump.host'" ||
+  # Translation: one host record per guest record, so the output ends up about
+  # the size of the input -- close enough to drive a bar. The module writes a
+  # .raw first and the augmentor then rewrites it, so whichever exists counts.
+  probe_translate() {
+    local raw final
+    raw="$(remote_size "${REMOTE_DIR}/pt_dump.host.raw")"
+    final="$(remote_size "${REMOTE_DIR}/pt_dump.host")"
+    (( final > raw )) && { printf '%s' "${final}"; return 0; }
+    printf '%s' "${raw}"
+  }
+  PROBE_CMD=probe_translate PROBE_TOTAL="$(local_size "${GUEST_PT}")" \
+    run_logged "translating GPA -> HPA on ${HOST}" "${HOST_LOG}" \
+      on_host "cd '${HOST_REPO}' && ./PageTables/Host/run.sh '${REMOTE_DIR}/pt_dump.guest' \
+               --output '${REMOTE_DIR}/pt_dump.host'" ||
     stage_failed "the host translation" "${HOST_LOG}"
 
-  run_logged "fetching the host page table" "${HOST_LOG}" \
-    scp "${SSH_OPTS[@]}" -q "${HOST_USER}@${HOST}:${REMOTE_DIR}/pt_dump.host" "${HOST_PT}" ||
+  # Download: the total is now known exactly, from the host.
+  probe_download() { local_size "${HOST_PT}"; }
+  PROBE_CMD=probe_download PROBE_TOTAL="$(remote_size "${REMOTE_DIR}/pt_dump.host")" \
+    run_logged "fetching the host page table" "${HOST_LOG}" \
+      scp "${SSH_OPTS[@]}" -q "${HOST_USER}@${HOST}:${REMOTE_DIR}/pt_dump.host" "${HOST_PT}" ||
     stage_failed "the download from ${HOST}" "${HOST_LOG}"
 
   [[ -s "${HOST_PT}" ]] ||
     UI_EXIT_CODE=3 ui::die "the host page table came back empty"
   ui::ok "host page table  $(ui::relpath "${HOST_PT}" "${REPO_ROOT}") ($(ui::size_of "${HOST_PT}"))"
+fi
+
+# ------------------------------------------------------------------------------
+#  Decode
+#
+#  Done here rather than inside the simulator. The simulator will decode a raw
+#  capture on its own, but then the hours it spends in raw2trace are reported
+#  under "Simulation", which is both wrong and impossible to read progress
+#  from. Decoding as its own stage names the work and lets the simulator start
+#  on a trace that is ready.
+# ------------------------------------------------------------------------------
+ui::step "Decode"
+
+TRACE_SUBDIR="$(find "${OUTPUT_DIR}" -maxdepth 1 -name 'drmemtrace*' -type d | sort | head -1)"
+[[ -n "${TRACE_SUBDIR}" ]] ||
+  UI_EXIT_CODE=3 ui::die "no drmemtrace directory in $(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}")"
+
+DECODE_ARGS=(--dir "${TRACE_SUBDIR}" --compact)
+(( FORCE_DECODE )) && DECODE_ARGS+=(--force)
+
+if ! "${REPO_ROOT}/Tracer/convert_trace.sh" "${DECODE_ARGS[@]}"; then
+  ui::fail "decoding the trace failed"
+  ui::result_banner fail "PIPELINE FAILED ${G_DOT} ${WORKLOAD}"
+  exit 3
 fi
 
 # ------------------------------------------------------------------------------

@@ -459,6 +459,41 @@ ui::bytes() {
 }
 
 #######################################
+# Render a progress label: a bar, how far through, and an estimate.
+#
+# Intended as the argument to ui::wait_tick, for the cases where the total is
+# genuinely known. Where it is not — a trace that runs until a reference count
+# no file size predicts — pass a plain description instead and let the elapsed
+# time speak, rather than inventing a completion figure.
+# Arguments:
+#   $1 — verb, e.g. "uploading";
+#   $2 — units done; $3 — units total;
+#   $4 — units per second, 0 or empty when not yet known;
+#   $5 — optional formatter: "bytes" (default) or "plain".
+# Outputs:
+#   The label on stdout.
+#######################################
+ui::progress() {
+  local verb="$1" done="${2:-0}" total="${3:-0}" rate="${4:-0}" fmt="${5:-bytes}"
+  local pct=0 eta='' render
+  (( total > 0 )) && pct=$(( done * 100 / total ))
+  (( pct > 100 )) && pct=100
+
+  if [[ "${fmt}" == bytes ]]; then
+    render=ui::bytes
+  else
+    render=ui::number
+  fi
+
+  if (( rate > 0 && total > done )); then
+    eta="  ${C_DIM}ETA $(ui::duration $(( (total - done) / rate )))${C_RESET}"
+  fi
+  printf '%s %3d%%  %s  %s / %s%s' \
+    "${verb}" "${pct}" "$(ui::bar "${pct}" 20)" \
+    "$(${render} "${done}")" "$(${render} "${total}")" "${eta}"
+}
+
+#######################################
 # Finish the progress line, replacing it with a final success message.
 # Arguments:
 #   $1 — completion message. The elapsed time is appended automatically.
