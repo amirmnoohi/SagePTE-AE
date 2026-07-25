@@ -86,14 +86,21 @@ ARCHES=()                # simulator configurations to run; default: arm
 readonly KNOWN_ARCHES=(arm x86)
 OUTPUT_DIR=""            # default: Data/<workload>
 FREEZE=1                 # 1 = hold the workload while its page table is read
-FORCE=0                  # 1 = redo stages whose output already exists
-TRACE_TIMEOUT=1800       # seconds to wait for recording to start
+TRACE_TIMEOUT=7200       # seconds to wait for recording to start
+
+# --force selects which stages to discard and redo. They are separate because
+# they cost wildly different amounts: re-capturing Redis means preloading a
+# 155 GB working set again, while re-simulating only replays an existing trace.
+FORCE_CAPTURE=0          # trace + guest page table (they are captured together)
+FORCE_HOST=0             # host page table
+FORCE_SIM=0              # the simulation and its analysis
 
 readonly SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=accept-new
                    -o ConnectTimeout=10)
 
 # Populated as the run progresses; referenced by the trap handler.
 WORKLOAD=""
+APP_BINARY=""            # the workload's binary, used to find it in /proc
 TRACER_PID=""
 APP_PID=""
 FROZEN=0
@@ -125,7 +132,12 @@ ${C_BOLD}OPTIONS${C_RESET}
       --host-user USER   ssh user on the host         (default: ${HOST_USER})
       --host-repo PATH   artifact path on the host    (default: discovered)
       --no-freeze        do not pause the workload during the snapshot
-  -f, --force            redo stages that already have output
+  -f, --force [STAGES]   discard existing output and redo it. With no argument
+                         this means everything; otherwise a comma-separated
+                         list of: capture, host-pt, sim
+                           --force sim        re-simulate an existing capture
+                           --force host-pt    redo just the host translation
+                           --force capture    re-trace from scratch
   -l, --list             list the available workloads
       --no-color         disable coloured output
   -h, --help             show this message
@@ -176,6 +188,37 @@ find_host_repo() {
 state_field() {
   [[ -f "$2" ]] || return 0
   sed -n "s/^$1=//p" "$2" | tail -1
+}
+
+#######################################
+# Describe what the workload is doing before recording starts.
+#
+# Nothing reports this directly: the tracer is waiting on a readiness file the
+# workload writes once its working set is built, and for Redis that means
+# preloading ~155 GB first. Resident memory is therefore the honest progress
+# signal — it is the working set being built — and the tracer's own last log
+# line covers the phases before the process exists.
+# Globals:
+#   Reads APP_BINARY, TRACE_LOG.
+# Outputs:
+#   A short status string on stdout.
+#######################################
+capture_progress() {
+  local pid rss
+  if [[ -n "${APP_BINARY}" ]] && pid="$(pgrep -x "${APP_BINARY}" 2> /dev/null | head -1)" &&
+    [[ -n "${pid}" ]]; then
+    rss="$(sed -n 's/^VmRSS:[[:space:]]*\([0-9]*\) kB/\1/p' "/proc/${pid}/status" 2> /dev/null)"
+    if [[ -n "${rss}" ]]; then
+      printf 'building working set  %s resident' "$(ui::bytes $(( rss * 1024 )))"
+      return 0
+    fi
+  fi
+  # Fall back to whatever the tracer last reported, with its colour stripped.
+  local line
+  line="$(tail -n 25 "${TRACE_LOG}" 2> /dev/null |
+    sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/^[[:space:]]*//' |
+    grep -vE '^[[:space:]]*$|^[─│╭╰]' | tail -1 | cut -c1-58)"
+  printf '%s' "${line:-waiting for the workload to start}"
 }
 
 #######################################
@@ -264,7 +307,27 @@ while (( $# > 0 )); do
     --host-user)    HOST_USER="${2:?--host-user requires a user}"; shift 2 ;;
     --host-repo)    HOST_REPO="${2:?--host-repo requires a path}"; shift 2 ;;
     --no-freeze)    FREEZE=0; shift ;;
-    -f | --force)   FORCE=1; shift ;;
+    -f | --force)
+      # The argument is optional, so it is only consumed when it names stages
+      # rather than being the workload or another flag.
+      if [[ "${2:-}" =~ ^(all|capture|trace|guest-pt|host-pt|sim)(,(all|capture|trace|guest-pt|host-pt|sim))*$ ]]; then
+        _stages="$2"; shift 2
+      else
+        _stages="all"; shift
+      fi
+      IFS=',' read -r -a _list <<< "${_stages}"
+      for _s in "${_list[@]}"; do
+        case "${_s}" in
+          all)                       FORCE_CAPTURE=1; FORCE_HOST=1; FORCE_SIM=1 ;;
+          # The guest page table is captured during the trace, so neither can
+          # be redone alone; and a new capture invalidates the host table
+          # derived from it.
+          capture | trace | guest-pt) FORCE_CAPTURE=1; FORCE_HOST=1 ;;
+          host-pt)                   FORCE_HOST=1 ;;
+          sim)                       FORCE_SIM=1 ;;
+        esac
+      done
+      unset _stages _list _s ;;
     -*)             UI_EXIT_CODE=1 ui::die "unknown option: $1" "try './${PROG} --help'" ;;
     # An architecture is recognised wherever it appears: the set is closed, so
     # there is nothing to disambiguate against a workload name.
@@ -325,6 +388,13 @@ ui::step "Preflight"
     "list them with: ./${PROG} --list"
 ui::ok "workload  $(ui::relpath "${WORKLOAD_DIR}/${WORKLOAD}.sh" "${REPO_ROOT}")"
 
+# Read the binary's name out of the definition rather than sourcing it: the
+# definition also declares shell functions, and this is only needed to spot the
+# process in /proc while it builds its working set.
+APP_BINARY="$(sed -n 's/^BINARY=["'\'']\{0,1\}\([^"'\'']*\).*/\1/p' \
+  "${WORKLOAD_DIR}/${WORKLOAD}.sh" | head -1)"
+APP_BINARY="$(basename "${APP_BINARY:-}")"
+
 for tool in "Tracer/build/bin64/drrun" "Simulator/build/bin64/drrun"; do
   [[ -x "${REPO_ROOT}/${tool}" ]] ||
     UI_EXIT_CODE=2 ui::die "${tool} is missing — the artifact is not built" \
@@ -368,24 +438,30 @@ ui::step "Memory trace"
 
 TRACE_LOG="${LOG_DIR}/${WORKLOAD}.trace.log"
 
-if [[ -d "${OUTPUT_DIR}/drmemtrace.dir" && -f "${GUEST_PT}" ]] && (( ! FORCE )); then
+if [[ -d "${OUTPUT_DIR}/drmemtrace.dir" && -f "${GUEST_PT}" ]] && (( ! FORCE_CAPTURE )); then
   ui::ok "already captured  $(ui::relpath "${OUTPUT_DIR}/drmemtrace.dir" "${REPO_ROOT}") ($(ui::size_of "${OUTPUT_DIR}/drmemtrace.dir"))"
-  ui::note "re-run with --force to capture again"
+  ui::note "re-run with --force capture to capture again"
   SKIP_CAPTURE=1
 else
   SKIP_CAPTURE=0
+  if [[ -e "${OUTPUT_DIR}" ]]; then
+    ui::warn "discarding the previous capture in $(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}") ($(ui::size_of "${OUTPUT_DIR}"))"
+    rm -rf "${OUTPUT_DIR}"
+  fi
   : > "${TRACE_LOG}"
-  (( FORCE )) && rm -rf "${OUTPUT_DIR}"
 
-  # The tracer is told not to pause: it would hold for an operator to capture
-  # the page table by hand, which is exactly what stage 3 of this script does.
-  "${REPO_ROOT}/Tracer/run.sh" "${WORKLOAD}" --output "${OUTPUT_DIR}" --no-pause \
+  # --no-pause: the tracer would otherwise hold for an operator to capture the
+  # page table by hand, which is what stage 3 of this script does instead.
+  # --force: reaching here means this capture is being (re)made, and the
+  # tracer refuses to write into a directory that already exists.
+  "${REPO_ROOT}/Tracer/run.sh" "${WORKLOAD}" --output "${OUTPUT_DIR}" --no-pause --force \
     >> "${TRACE_LOG}" 2>&1 &
   TRACER_PID=$!
   ui::info "tracer started  $(ui::relpath "${TRACE_LOG}" "${REPO_ROOT}")"
 
-  # Wait for recording to actually begin: the workload builds its working set
-  # first, and only then is the page table worth snapshotting.
+  # Wait for recording to actually begin. The workload builds its working set
+  # first and only then signals readiness, so this is the long part of a
+  # capture -- Redis preloads ~155 GB before it says it is ready.
   ui::wait_begin "waiting for recording to start"
   deadline=$(( SECONDS + TRACE_TIMEOUT ))
   while :; do
@@ -397,9 +473,10 @@ else
     fi
     (( SECONDS < deadline )) || { ui::wait_abort
       UI_EXIT_CODE=3 ui::die "recording did not start within $(ui::duration "${TRACE_TIMEOUT}")" \
+        "the workload never signalled readiness" \
         "log: $(ui::relpath "${TRACE_LOG}" "${REPO_ROOT}")"; }
     sleep 2
-    ui::wait_tick "waiting for recording to start"
+    ui::wait_tick "$(capture_progress)"
   done
   APP_PID="$(state_field APP_PID "${STATE_FILE}")"
   ui::wait_end "recording  pid ${APP_PID}"
@@ -456,10 +533,14 @@ fi
 # ------------------------------------------------------------------------------
 ui::step "Host page table"
 
-if [[ -f "${HOST_PT}" ]] && (( ! FORCE )); then
+if [[ -f "${HOST_PT}" ]] && (( ! FORCE_HOST )); then
   ui::ok "already present  $(ui::relpath "${HOST_PT}" "${REPO_ROOT}") ($(ui::size_of "${HOST_PT}"))"
-  ui::note "re-run with --force to translate again"
+  ui::note "re-run with --force host-pt to translate again"
 else
+  if [[ -f "${HOST_PT}" ]]; then
+    ui::warn "discarding the previous host page table ($(ui::size_of "${HOST_PT}"))"
+    rm -f "${HOST_PT}"
+  fi
   HOST_LOG="${LOG_DIR}/${WORKLOAD}.host-pt.log"
   : > "${HOST_LOG}"
   # Absolute, resolved on the host: the translation runs after a cd into the
@@ -498,6 +579,20 @@ fi
 # Each machine is simulated from the same capture; only this stage is repeated.
 for arch in "${ARCHES[@]}"; do
   ui::step "Simulation ${G_DOT} ${arch}"
+  analysis="${REPO_ROOT}/Results/${WORKLOAD}/analysis_${arch}.txt"
+
+  # A simulation over a full trace runs for hours, so a finished one is never
+  # repeated by accident.
+  if [[ -s "${analysis}" ]] && (( ! FORCE_SIM )); then
+    ui::ok "already simulated  $(ui::relpath "${analysis}" "${REPO_ROOT}")"
+    ui::note "re-run with --force sim to simulate again"
+    continue
+  fi
+  if [[ -e "${analysis}" ]]; then
+    ui::warn "discarding the previous ${arch} result"
+    rm -f "${analysis}" "${REPO_ROOT}/Results/${WORKLOAD}/sim_${arch}.log"
+  fi
+
   ui::info "handing over to Simulator/run_${arch}.sh"
   ui::blank
   if ! "${REPO_ROOT}/Simulator/run_${arch}.sh" "${OUTPUT_DIR}"; then
