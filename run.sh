@@ -468,11 +468,25 @@ APP_BINARY="$(sed -n 's/^BINARY=["'\'']\{0,1\}\([^"'\'']*\).*/\1/p' \
   "${WORKLOAD_DIR}/${WORKLOAD}.sh" | head -1)"
 APP_BINARY="$(basename "${APP_BINARY:-}")"
 
+# Build on demand rather than sending the operator away to do it. This is the
+# one command the artifact asks for, so it should not stop to ask for another.
+NEED_BUILD=0
 for tool in "Tracer/build/bin64/drrun" "Simulator/build/bin64/drrun"; do
-  [[ -x "${REPO_ROOT}/${tool}" ]] ||
-    UI_EXIT_CODE=2 ui::die "${tool} is missing — the artifact is not built" \
-      "build it with:" "    ./build.sh"
+  [[ -x "${REPO_ROOT}/${tool}" ]] || NEED_BUILD=1
 done
+
+if (( NEED_BUILD )); then
+  ui::info "the artifact is not built yet; building it first"
+  BUILD_LOG="${LOG_DIR}/build.log"
+  : > "${BUILD_LOG}"
+  run_logged "building the artifact" "${BUILD_LOG}" "${REPO_ROOT}/build.sh" ||
+    stage_failed "the build" "${BUILD_LOG}"
+  for tool in "Tracer/build/bin64/drrun" "Simulator/build/bin64/drrun"; do
+    [[ -x "${REPO_ROOT}/${tool}" ]] ||
+      UI_EXIT_CODE=2 ui::die "${tool} is still missing after the build" \
+        "see $(ui::relpath "${BUILD_LOG}" "${REPO_ROOT}")"
+  done
+fi
 ui::ok "tracer and simulator built"
 
 ui::wait_begin "contacting ${HOST_USER}@${HOST}"

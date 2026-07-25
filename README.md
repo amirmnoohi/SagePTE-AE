@@ -1,5 +1,30 @@
 # SagePTE — Artifact
 
+## For reviewers: one command
+
+```bash
+./run.sh redis
+```
+
+That is the whole evaluation. It builds the artifact if it has not been built,
+traces the workload, captures the guest page table, produces the host page
+table over SSH on the KVM host, decodes the trace, simulates it, and writes the
+parsed result to `Results/redis/`. Nothing else needs to be run, and no step
+needs to be supervised.
+
+Substitute any workload from `./run.sh --list`, and add `arm` or `both` to
+simulate a different machine (`x86` is the default). Every stage checks for its
+own output first, so an interrupted run is resumed simply by repeating the
+command.
+
+It expects a QEMU/KVM host–guest pair, since the host page table can only be
+produced on the host while the guest is running; `--host` and `--host-user`
+point it at yours. Allow roughly seven hours for Redis, of which four are the
+capture. To skip the capture and simulate the published dataset instead, see
+[Simulate an existing dataset](#simulate-an-existing-dataset).
+
+---
+
 Evaluation artifact for **SagePTE**, a virtual-memory design for virtualized
 systems that co-locates the guest and host page-table entries for a page inside
 a single 128-bit extended PTE, so the hardware page walker can return a host
@@ -21,8 +46,8 @@ what removing it is worth.
 The **tooling**: a memory tracer, guest and host page-table dumpers, a
 nested-page-walk simulator, and the workload definitions that drive them.
 
-It does **not** contain the captured data. A single Redis trace is ~19 GB and
-decoding it yields ~135 GB, so traces and page-table dumps are published
+It does **not** contain the captured data. The Redis capture is 20 GB and
+decodes to 106 GB, so traces and page-table dumps are published
 separately (Zenodo; DOI assigned at camera-ready) and are re-creatable with the
 tools here.
 
@@ -44,7 +69,7 @@ output in a known place. Every component's entry point is called `run.sh`.
 | `Tracer/run.sh <workload>` | guest VM | `Data/<workload>/drmemtrace.dir/` |
 | `PageTables/Guest/run.sh <workload>` | guest VM | `Data/<workload>/pt_dump.guest` |
 | `PageTables/Host/run.sh <guest-pt>` | KVM host | `pt_dump.host` |
-| `Simulator/run_arm.sh ../Data/<workload>` | guest VM | `Results/<workload>/analysis_arm.txt` |
+| `Simulator/run_x86.sh ../Data/<workload>` | guest VM | `Results/<workload>/analysis_x86.txt` |
 
 ---
 
@@ -72,16 +97,17 @@ With a published dataset unpacked into `Data/`, this is the whole reproduction.
 Capture needs a guest VM; replaying an existing dataset does not:
 
 ```bash
+./build.sh --only simulator             # enough to replay
 cd Simulator
-./install.sh                      # builds the simulator
-./run_x86.sh example              # ~1 min smoke test
-./run_arm.sh ../Data/redis        # the paper's configuration
+./run_x86.sh ../Data/redis              # x86 configuration
+./run_arm.sh ../Data/redis              # the paper's configuration
 cat ../Results/redis/analysis_arm.txt   # written by the run
 ```
 
-The smoke test is self-contained and needs no dataset: it ships with a small
-trace and matching dumps, and should report 9548 walks, ~109 cycles for nested
-paging and a ~1.25× SagePTE speedup.
+The two page-table dumps are located automatically beside the trace. The first
+run decodes the raw capture, which for Redis takes about 11 minutes and expands
+20 GB to 106 GB; every later run reuses it. A configuration then replays in
+roughly 2.5 hours.
 
 ### Capture a workload yourself
 
@@ -89,11 +115,11 @@ Requires a QEMU/KVM host–guest pair, and key-based SSH from the guest to the
 host. From inside the guest, this is the whole capture:
 
 ```bash
-./run.sh debug              # trace, both page tables, then simulate
-./run.sh redis both         # capture once, simulate arm and x86
+./run.sh redis              # trace, both page tables, decode, simulate
+./run.sh redis both         # capture once, simulate x86 and arm
 ```
 
-`run.sh` drives all four stages, including the trip to the KVM host: it copies
+`run.sh` drives all five stages, including the trip to the KVM host: it copies
 the guest page table up, runs the translation there over SSH, and brings the
 result back. Point it elsewhere with `--host`, `--host-user` and `--host-repo`.
 Every stage checks for its own output first, so an interrupted run is simply
