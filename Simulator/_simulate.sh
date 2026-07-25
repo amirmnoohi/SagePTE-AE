@@ -265,7 +265,7 @@ watch_simulation() {
       verb="decoding"; SIM_PHASE="decoding"
     else
       ui::wait_tick "starting the simulation"
-      sleep 1
+      ui::wait_sleep 1
       continue
     fi
 
@@ -280,7 +280,7 @@ watch_simulation() {
     fi
 
     ui::wait_tick "$(ui::progress "${verb}" "${pos}" "${total}" "${rate}")"
-    sleep 1
+    ui::wait_sleep 1
   done
 }
 

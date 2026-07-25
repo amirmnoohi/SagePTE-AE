@@ -297,7 +297,7 @@ run_logged() {
     else
       ui::wait_tick "${label}"
     fi
-    sleep 2
+    ui::wait_sleep 2
   done
   wait "${pid}" || rc=$?
   (( rc == 0 )) && ui::wait_end "${label}" || ui::wait_abort
@@ -519,7 +519,7 @@ if [[ -d "${OUTPUT_DIR}/drmemtrace.dir" && -f "${GUEST_PT}" ]] && (( ! FORCE_CAP
 else
   SKIP_CAPTURE=0
   if [[ -e "${OUTPUT_DIR}" ]]; then
-    ui::warn "discarding the previous capture in $(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}") ($(ui::size_of "${OUTPUT_DIR}"))"
+    ui::info "discarding the previous capture in $(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}") ($(ui::size_of "${OUTPUT_DIR}"))"
     rm -rf "${OUTPUT_DIR}"
   fi
   : > "${TRACE_LOG}"
@@ -549,7 +549,7 @@ else
       UI_EXIT_CODE=3 ui::die "recording did not start within $(ui::duration "${TRACE_TIMEOUT}")" \
         "the workload never signalled readiness" \
         "log: $(ui::relpath "${TRACE_LOG}" "${REPO_ROOT}")"; }
-    sleep 2
+    ui::wait_sleep 2
     ui::wait_tick "$(capture_progress)"
   done
   APP_PID="$(state_field APP_PID "${STATE_FILE}")"
@@ -604,7 +604,7 @@ else
       else
         ui::wait_tick "finishing the trace  ${C_DIM}$(ui::bytes "${tr_now}")${C_RESET}"
       fi
-      sleep 2
+      ui::wait_sleep 2
     done
     trace_rc=0
     wait "${TRACER_PID}" || trace_rc=$?
@@ -627,7 +627,7 @@ if [[ -f "${HOST_PT}" ]] && (( ! FORCE_HOST )); then
   ui::note "re-run with --force host-pt to translate again"
 else
   if [[ -f "${HOST_PT}" ]]; then
-    ui::warn "discarding the previous host page table ($(ui::size_of "${HOST_PT}"))"
+    ui::info "discarding the previous host page table ($(ui::size_of "${HOST_PT}"))"
     rm -f "${HOST_PT}"
   fi
   HOST_LOG="${LOG_DIR}/${WORKLOAD}.host-pt.log"
@@ -720,7 +720,7 @@ for arch in "${ARCHES[@]}"; do
     continue
   fi
   if [[ -e "${analysis}" ]]; then
-    ui::warn "discarding the previous ${arch} result"
+    ui::info "discarding the previous ${arch} result"
     rm -f "${analysis}" "${REPO_ROOT}/Results/${WORKLOAD}/sim_${arch}.log"
   fi
 

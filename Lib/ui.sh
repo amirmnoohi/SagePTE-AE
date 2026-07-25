@@ -45,6 +45,8 @@ _UI_WAIT_LABEL=""    # label of the in-flight ui::wait_* progress line
 _UI_WAIT_START=0     # epoch seconds when the current wait began
 _UI_WAIT_LAST=0      # last time a non-TTY progress line was printed
 _UI_WAIT_ACTIVE=0    # 1 while a progress line is on screen
+_UI_WAIT_TEXT=""     # last label rendered, so ui::wait_sleep can redraw it
+_UI_SPIN_I=0         # spinner frame, advanced per redraw rather than per second
 _UI_LABEL_WIDTH=18   # column width for ui::field labels
 _UI_COMPACT=0        # 1 when running nested inside another script's output
 
@@ -415,9 +417,11 @@ ui::wait_tick() {
   # An argument replaces the label for this redraw, which lets a caller report
   # live progress ("12.4GB / ~135GB (9%)") instead of a static message.
   local label="${1:-${_UI_WAIT_LABEL}}"
+  _UI_WAIT_TEXT="${label}"
   local elapsed=$(( SECONDS - _UI_WAIT_START ))
   if [[ -t 2 ]]; then
-    local frame="${_UI_SPIN[$(( (SECONDS * 2) % ${#_UI_SPIN[@]} ))]}"
+    _UI_SPIN_I=$(( _UI_SPIN_I + 1 ))
+    local frame="${_UI_SPIN[$(( _UI_SPIN_I % ${#_UI_SPIN[@]} ))]}"
     printf '\r  %s%s%s %s %s%s%s\033[K' \
       "${C_CYAN}" "${frame}" "${C_RESET}" "${label}" \
       "${C_DIM}" "$(ui::duration "${elapsed}")" "${C_RESET}" >&2
@@ -428,6 +432,34 @@ ui::wait_tick() {
       printf '  %s %s (%s)\n' "${G_DOT}" "${label}" "$(ui::duration "${elapsed}")"
     fi
   fi
+}
+
+#######################################
+# Sleep, keeping the progress line animated while doing so.
+#
+# Callers poll things that are expensive to ask about — a file size over SSH, a
+# directory total — so they cannot poll at the frame rate. This decouples the
+# two: the caller sleeps for as long as it wants between polls, and the spinner
+# is redrawn many times inside that sleep. Off a TTY there is nothing to
+# animate, so it is a plain sleep.
+# Arguments:
+#   $1 — seconds to sleep (may be fractional).
+#######################################
+ui::wait_sleep() {
+  local total="${1:-1}"
+  if [[ ! -t 2 ]] || (( ! _UI_WAIT_ACTIVE )); then
+    sleep "${total}"
+    return 0
+  fi
+  # Integer arithmetic only: twelve frames a second, which is smooth to the eye
+  # and costs nothing. Callers pass whole seconds.
+  local frames=$(( ${total%%.*} * 12 )) i
+  (( frames < 1 )) && frames=12
+  for (( i = 0; i < frames; i++ )); do
+    sleep 0.08
+    ui::wait_tick "${_UI_WAIT_TEXT}"
+  done
+  return 0
 }
 
 #######################################
