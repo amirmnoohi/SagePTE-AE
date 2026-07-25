@@ -253,6 +253,60 @@ tidy_trace_dir() {
   mv -T "${current}" "${tidy}" 2>/dev/null || return 0
 }
 
+# How many consecutive idle samples (one per second) must agree before a run is
+# treated as finished-but-parked. Generous on purpose: it is only ever paid once
+# at the end of a capture that has already taken hours, and the cost of being
+# too eager is a truncated trace.
+readonly PARKED_GRACE=30
+
+#######################################
+# A signature of the traced process, non-empty only while it looks finished.
+#
+# -exit_after_tracing terminates the application once the reference limit is
+# reached, but it terminates the thread that hit the limit. Threads parked on a
+# futex when that happens are never woken and never exit, so the thread group
+# never empties: the leader stays in Z state, the PID remains allocated, and a
+# loop watching for that PID to disappear is waiting for something that cannot
+# happen. Redis parks three background threads at startup and hangs this way on
+# every capture.
+#
+# A zombie leader is not enough to act on by itself, because a program may call
+# pthread_exit() from main and leave genuine workers running behind it. So the
+# signature also carries the total CPU consumed by every thread and the size of
+# the capture; the caller compares consecutive samples and only acts once
+# neither has moved for PARKED_GRACE seconds, which a working thread would
+# disturb.
+# Arguments:
+#   $1 — pid of the traced process.
+# Outputs:
+#   "<cpu-ticks> <capture-bytes>" when the leader has exited, else nothing.
+#######################################
+parked_signature() {
+  local pid="$1" rest cpu=0 bytes=0 dir tstat
+  local -a f
+
+  [[ -r "/proc/${pid}/stat" ]] || return 0
+  # comm sits in parentheses and may itself contain spaces, so everything up to
+  # the last ')' is discarded and the state becomes the first field.
+  rest="$(sed 's/^.*) //' "/proc/${pid}/stat" 2>/dev/null)" || return 0
+  [[ "${rest%% *}" == Z ]] || return 0
+
+  for tstat in "/proc/${pid}/task/"*/stat; do
+    [[ -r "${tstat}" ]] || continue
+    rest="$(sed 's/^.*) //' "${tstat}" 2>/dev/null)" || continue
+    read -r -a f <<< "${rest}"
+    # utime and stime are fields 14 and 15 of the original line.
+    cpu=$(( cpu + ${f[11]:-0} + ${f[12]:-0} ))
+  done
+
+  dir="$(find_trace_dir)"
+  if [[ -n "${dir}" ]]; then
+    bytes="$(du -sb "${dir}" 2>/dev/null | cut -f1)" || bytes=0
+  fi
+
+  printf '%s %s' "${cpu}" "${bytes:-0}"
+}
+
 # ==============================================================================
 #  Environment
 # ==============================================================================
@@ -685,9 +739,38 @@ fi
 ui::step "Execution"
 
 ui::wait_begin "tracing (stops after $(ui::number "${MAX_REFS}") references)"
+
+# Set when the run had to be finished off by hand; see parked_signature().
+reaped_parked=0
+parked_samples=0
+parked_prev=""
+
 while kill -0 "${TRACER_PID}" 2>/dev/null; do
   sleep 1
   ui::wait_tick
+
+  parked_now="$(parked_signature "${TRACER_PID}")"
+  if [[ -z "${parked_now}" ]]; then
+    # Still running normally, which is the case on every pass of a healthy run.
+    parked_samples=0
+    parked_prev=""
+    continue
+  fi
+
+  if [[ "${parked_now}" == "${parked_prev}" ]]; then
+    parked_samples=$(( parked_samples + 1 ))
+  else
+    parked_samples=0
+    parked_prev="${parked_now}"
+  fi
+  (( parked_samples >= PARKED_GRACE )) || continue
+
+  # Nothing has moved for PARKED_GRACE seconds and the leader is gone: the
+  # trace is complete and only parked threads remain. SIGKILL empties the
+  # thread group so the PID can be reaped and the pipeline can go on.
+  kill -KILL "${TRACER_PID}" 2>/dev/null || true
+  reaped_parked=1
+  break
 done
 
 # The child has exited; `wait` now returns its status immediately.
@@ -695,7 +778,16 @@ tracer_status=0
 wait "${TRACER_PID}" || tracer_status=$?
 TRACER_PID=""
 trap - INT TERM
-ui::wait_end "workload finished"
+
+if (( reaped_parked )); then
+  # The SIGKILL above is the reason for the status, and it was sent after the
+  # capture was complete, so it does not make the run a failure.
+  tracer_status=0
+  ui::wait_end "workload finished"
+  ui::note "threads left parked after the reference limit were reaped; the trace is complete"
+else
+  ui::wait_end "workload finished"
+fi
 
 post_run
 
