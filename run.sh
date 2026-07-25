@@ -255,7 +255,9 @@ local_size() { stat -c %s "$1" 2> /dev/null || echo 0; }
 # estimate; without them it carries the label and the elapsed time. Nothing
 # here invents a completion figure for work whose size is not known in advance.
 # Globals:
-#   Reads PROBE_CMD and PROBE_TOTAL when set, to measure progress.
+#   Reads PROBE_CMD and PROBE_TOTAL when set, to measure progress as a
+#   fraction; or PROBE_TEXT_CMD, for work whose remaining time is not
+#   predictable but whose current activity is worth naming.
 # Arguments:
 #   $1 — label; $2 — log path; $3… — the command.
 # Returns:
@@ -279,6 +281,8 @@ run_logged() {
         last_t=${now}
       fi
       ui::wait_tick "$(ui::progress "${label}" "${done}" "${PROBE_TOTAL}" "${rate}")"
+    elif [[ -n "${PROBE_TEXT_CMD:-}" ]]; then
+      ui::wait_tick "${label}  ${C_DIM}$(${PROBE_TEXT_CMD})${C_RESET}"
     else
       ui::wait_tick "${label}"
     fi
@@ -636,17 +640,18 @@ else
 
   # PageTables/Host/run.sh loads its own module and runs the augmentor; it
   # needs the guest to still be running, which it is — we are inside it.
-  # Translation: one host record per guest record, so the output ends up about
-  # the size of the input -- close enough to drive a bar. The module writes a
-  # .raw first and the augmentor then rewrites it, so whichever exists counts.
+  # No bar for the translation. Its output stops growing once the module has
+  # written the raw table, and the augmentor then rewrites that file in place
+  # for as long again -- so a size-driven bar parks near the end and sits
+  # there, which is worse than no bar at all. The host script announces each
+  # of its own phases, so those are shown instead.
   probe_translate() {
-    local raw final
-    raw="$(remote_size "${REMOTE_DIR}/pt_dump.host.raw")"
-    final="$(remote_size "${REMOTE_DIR}/pt_dump.host")"
-    (( final > raw )) && { printf '%s' "${final}"; return 0; }
-    printf '%s' "${raw}"
+    tail -n 40 "${HOST_LOG}" 2> /dev/null |
+      sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' |
+      grep -oE '(\[\.\.\]|\[OK\]|•|✔) .*' | tail -1 |
+      sed -e 's/^\(\[\.\.\]\|\[OK\]\|•\|✔\) *//' -e 's/\.\.\.$//' | cut -c1-52
   }
-  PROBE_CMD=probe_translate PROBE_TOTAL="$(local_size "${GUEST_PT}")" \
+  PROBE_TEXT_CMD=probe_translate \
     run_logged "translating GPA -> HPA on ${HOST}" "${HOST_LOG}" \
       on_host "cd '${HOST_REPO}' && ./PageTables/Host/run.sh '${REMOTE_DIR}/pt_dump.guest' \
                --output '${REMOTE_DIR}/pt_dump.host'" ||
