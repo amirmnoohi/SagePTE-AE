@@ -203,8 +203,9 @@ arguments and readiness signal, and it is immediately runnable as
 | :-- | :-- |
 | Simulation only | Linux x86-64, gcc/g++ 7, CMake ≥ 3.2, Python 3 |
 | Capture | a QEMU/KVM host–guest pair, kernel headers, root in both |
-| Host page tables | **Linux ≥ 6.1** on the KVM host — the module uses the maple-tree VMA iterators (`VMA_ITERATOR`, `for_each_vma`) |
-| Disk | traces are large: ~19 GB raw per workload, ~9× that once decoded |
+| Guest kernel | **Linux 5.15.** The `/proc/page_tables` module reads `kvm_mmu` fields (`shadow_root_level`, `direct_map`) that later kernels removed; it does not build on 6.8 |
+| Host kernel | **Linux ≥ 6.1.** The GPA→HPA module uses the maple-tree VMA iterators (`VMA_ITERATOR`, `for_each_vma`), added in that release |
+| Disk | ~130 GB per workload: the Redis capture is 20 GB and decodes to 106 GB |
 
 `./build.sh` installs the toolchain on Ubuntu and then builds everything;
 `./build.sh --only deps` stops after the toolchain. (`install_deps.sh` still
