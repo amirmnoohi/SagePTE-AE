@@ -320,7 +320,7 @@ stage_failed() {
   done < <(tail -n 8 "${log}" 2> /dev/null)
   ui::blank
   ui::note "full log: $(ui::relpath "${log}" "${REPO_ROOT}")"
-  ui::result_banner fail "PIPELINE FAILED ${G_DOT} ${WORKLOAD}"
+  ui::result_banner fail "PIPELINE FAILED: ${WORKLOAD}"
   exit 3
 }
 
@@ -357,7 +357,7 @@ on_interrupt() {
   [[ -n "${TRACER_PID}" ]] && kill "${TRACER_PID}" 2> /dev/null || true
   ui::blank
   ui::fail "interrupted"
-  ui::result_banner fail "PIPELINE INTERRUPTED ${G_DOT} ${WORKLOAD}"
+  ui::result_banner fail "PIPELINE INTERRUPTED: ${WORKLOAD}"
   exit 130
 }
 
@@ -449,8 +449,7 @@ mkdir -p "${SSH_CTL_DIR}" && chmod 700 "${SSH_CTL_DIR}"
 
 # Five capture stages, then one simulation per machine being modelled.
 ui::set_steps $(( 5 + ${#ARCHES[@]} ))
-ui::banner "SagePTE ${G_DOT} End-to-end pipeline" \
-  "${WORKLOAD} ${G_DOT} ${ARCHES[*]} ${G_DOT} capture here, translate on the host, then simulate"
+ui::banner "SagePTE ${G_DOT} End-to-end pipeline" "${WORKLOAD} (${ARCHES[*]})"
 
 # ------------------------------------------------------------------------------
 #  1/5 — Preflight
@@ -581,7 +580,7 @@ else
   set -e
   thaw
   (( dump_rc == 0 )) || { ui::fail "the guest page-table capture failed (exit ${dump_rc})"
-    ui::result_banner fail "PIPELINE FAILED ${G_DOT} ${WORKLOAD}"; exit 3; }
+    ui::result_banner fail "PIPELINE FAILED: ${WORKLOAD}"; exit 3; }
   ui::ok "workload resumed"
 
   # Let the trace finish; it stops itself at the reference limit.
@@ -700,7 +699,7 @@ DECODE_ARGS=(--dir "${TRACE_SUBDIR}" --compact)
 
 if ! "${REPO_ROOT}/Tracer/convert_trace.sh" "${DECODE_ARGS[@]}"; then
   ui::fail "decoding the trace failed"
-  ui::result_banner fail "PIPELINE FAILED ${G_DOT} ${WORKLOAD}"
+  ui::result_banner fail "PIPELINE FAILED: ${WORKLOAD}"
   exit 3
 fi
 
@@ -709,7 +708,7 @@ fi
 # ------------------------------------------------------------------------------
 # Each machine is simulated from the same capture; only this stage is repeated.
 for arch in "${ARCHES[@]}"; do
-  ui::step "Simulation ${G_DOT} ${arch}"
+  ui::step "Simulation (${arch})"
   analysis="${REPO_ROOT}/Results/${WORKLOAD}/analysis_${arch}.txt"
 
   # A simulation over a full trace runs for hours, so a finished one is never
@@ -728,7 +727,7 @@ for arch in "${ARCHES[@]}"; do
   ui::blank
   if ! "${REPO_ROOT}/Simulator/run_${arch}.sh" "${OUTPUT_DIR}"; then
     ui::fail "the ${arch} simulation failed"
-    ui::result_banner fail "PIPELINE FAILED ${G_DOT} ${WORKLOAD} (${arch})"
+    ui::result_banner fail "PIPELINE FAILED: ${WORKLOAD} (${arch})"
     exit 3
   fi
 done
@@ -736,7 +735,7 @@ done
 # ------------------------------------------------------------------------------
 #  Done
 # ------------------------------------------------------------------------------
-ui::result_banner ok "PIPELINE COMPLETE ${G_DOT} ${WORKLOAD} (${ARCHES[*]})"
+ui::result_banner ok "PIPELINE COMPLETE: ${WORKLOAD} (${ARCHES[*]})"
 ui::field "elapsed"  "$(ui::duration $(( SECONDS - RUN_START )))"
 ui::field "trace"    "$(ui::relpath "${OUTPUT_DIR}/drmemtrace.dir" "${REPO_ROOT}")"
 ui::field "guest PT" "$(ui::relpath "${GUEST_PT}" "${REPO_ROOT}")"

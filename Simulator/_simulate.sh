@@ -462,7 +462,7 @@ if (( SIM_STATUS != 0 )); then
   if (( SIM_STATUS > 128 )); then
     signo=$(( SIM_STATUS - 128 ))
     ui::fail "${what} was terminated by signal ${signo} ($(kill -l "${signo}" 2> /dev/null || echo "signal ${signo}"))"
-    ui::note "something outside this run stopped it — it did not fail on its own"
+    ui::note "an external signal, not a fault in the run"
     outcome="STOPPED"
   else
     ui::fail "${what} failed (exit ${SIM_STATUS})"
@@ -484,7 +484,7 @@ if (( SIM_STATUS != 0 )); then
   fi
 
   ui::note "full log: $(ui::relpath "${SIM_LOG}" "${REPO_ROOT}")"
-  ui::result_banner fail "${what^^} ${outcome} ${G_DOT} ${NAME}"
+  ui::result_banner fail "${what^^} ${outcome}: ${NAME}"
   exit 3
 fi
 
@@ -509,7 +509,7 @@ else
   ui::note "log: $(ui::relpath "${SIM_LOG}" "${REPO_ROOT}")"
 fi
 
-ui::result_banner ok "SIMULATION COMPLETE ${G_DOT} ${NAME} (${CONFIG_NAME})"
+ui::result_banner ok "SIMULATION COMPLETE: ${NAME} (${CONFIG_NAME})"
 ui::field "elapsed"  "$(ui::duration $(( SECONDS - RUN_START )))"
 ui::field "log"      "$(ui::relpath "${SIM_LOG}" "${REPO_ROOT}")  ($(ui::size_of "${SIM_LOG}"))"
 [[ -f "${ANALYSIS_FILE}" ]] &&
