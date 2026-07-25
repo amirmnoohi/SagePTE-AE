@@ -98,7 +98,7 @@ source "${REPO_ROOT}/Lib/ui.sh"
 # ------------------------------------------------------------------------------
 HOST="192.168.122.1"     # the KVM host, as seen from inside this guest
 HOST_USER="root"
-HOST_REPO=""             # default: discovered on the host, see find_host_repo
+HOST_STAGE=""            # where the host tooling is placed; set in stage 3
 ARCHES=()                # simulator configurations to run; default: x86
 readonly KNOWN_ARCHES=(arm x86)
 OUTPUT_DIR=""            # default: Data/<workload>
@@ -154,7 +154,6 @@ ${C_BOLD}OPTIONS${C_RESET}
   -o, --output DIR       capture directory            (default: Data/<workload>)
       --host ADDR        the KVM host                 (default: ${HOST})
       --host-user USER   ssh user on the host         (default: ${HOST_USER})
-      --host-repo PATH   artifact path on the host    (default: discovered)
       --no-freeze        do not pause the workload during the snapshot
   -f, --force [STAGES]   discard existing output and redo it. With no argument
                          this means everything; otherwise a comma-separated
@@ -174,8 +173,9 @@ ${C_BOLD}EXAMPLES${C_RESET}
   ./${PROG} redis both               capture once, simulate both machines
 
 ${C_BOLD}REQUIRES${C_RESET}
-  Key-based SSH from this guest to ${HOST_USER}@${HOST}, and the artifact
-  checked out and built on that host.
+  Key-based SSH from this guest to ${HOST_USER}@${HOST}, and kernel headers
+  there. The host tooling is copied over and built by this script; nothing
+  needs to be installed on the host beforehand.
 EOF
 }
 
@@ -191,15 +191,25 @@ EOF
 on_host() { ssh "${SSH_OPTS[@]}" "${HOST_USER}@${HOST}" "$@"; }
 
 #######################################
-# Locate the artifact on the host, so --host-repo is only needed when the
-# checkout is somewhere unusual.
-# Outputs:
-#   The remote path on stdout, empty when nothing was found.
+# Copy the host-side tooling to the KVM host, so the only machine that needs
+# this artifact installed is the one being run from.
+#
+# Sources only: the module and the augmentor are rebuilt there against the
+# host's own kernel, and shipping our binaries would mean shipping objects
+# built for the guest's. PageTables/Host expects Lib/ui.sh two directories
+# above it, so the pair is unpacked with that shape intact.
+# Arguments:
+#   $1 — destination directory on the host.
 #######################################
-find_host_repo() {
-  on_host 'for d in ~/SagePTE-AE /root/SagePTE-AE /home/*/SagePTE-AE /opt/SagePTE-AE; do
-             [ -x "$d/PageTables/Host/run.sh" ] && { echo "$d"; exit 0; }
-           done' 2> /dev/null || true
+push_host_code() {
+  local dest="$1"
+  on_host "rm -rf '${dest}' && mkdir -p '${dest}'" || return 1
+  tar -C "${REPO_ROOT}" \
+    --exclude='*.o' --exclude='*.ko' --exclude='*.mod' --exclude='*.mod.c' \
+    --exclude='.*.cmd' --exclude='Module.symvers' --exclude='modules.order' \
+    --exclude='host_pt_augmentor' --exclude='*.log' --exclude='build.log' \
+    -cf - PageTables/Host Lib |
+    on_host "tar -C '${dest}' -xf -"
 }
 
 #######################################
@@ -377,7 +387,6 @@ while (( $# > 0 )); do
     -o | --output)  OUTPUT_DIR="${2:?--output requires a directory}"; shift 2 ;;
     --host)         HOST="${2:?--host requires an address}"; shift 2 ;;
     --host-user)    HOST_USER="${2:?--host-user requires a user}"; shift 2 ;;
-    --host-repo)    HOST_REPO="${2:?--host-repo requires a path}"; shift 2 ;;
     --no-freeze)    FREEZE=0; shift ;;
     -f | --force)
       # The argument is optional, so it is only consumed when it names stages
@@ -498,14 +507,14 @@ if ! on_host true 2> /dev/null; then
 fi
 ui::wait_end "host reachable  ${HOST_USER}@${HOST}"
 
-if [[ -z "${HOST_REPO}" ]]; then
-  HOST_REPO="$(find_host_repo)"
-  [[ -n "${HOST_REPO}" ]] ||
-    UI_EXIT_CODE=2 ui::die "the artifact was not found on ${HOST}" \
-      "stage 3 runs PageTables/Host/run.sh there" \
-      "point at it with: --host-repo /path/to/SagePTE-AE"
+# Nothing needs to be installed on the host: the tooling is copied there when
+# stage 3 runs. What the host must have is a kernel it can build against.
+if on_host 'test -d /lib/modules/$(uname -r)/build' 2> /dev/null; then
+  ui::ok "host can build kernel modules"
+else
+  ui::warn "the host has no build tree for its running kernel"
+  ui::note "install linux-headers there, or stage 3 will fail"
 fi
-ui::ok "host artifact  ${HOST_REPO}"
 
 HOST_KERNEL="$(on_host 'uname -r' 2> /dev/null || echo unknown)"
 if [[ "${HOST_KERNEL}" =~ ^([0-9]+)\.([0-9]+) ]] &&
@@ -652,8 +661,13 @@ else
   [[ -n "${REMOTE_HOME}" ]] ||
     UI_EXIT_CODE=3 ui::die "could not determine the home directory of ${HOST_USER}@${HOST}"
   REMOTE_DIR="${REMOTE_HOME}/sagepte-${WORKLOAD}"
+  HOST_STAGE="${REMOTE_HOME}/sagepte-host"
 
   on_host "mkdir -p '${REMOTE_DIR}'" >> "${HOST_LOG}" 2>&1
+
+  run_logged "copying the host tooling to ${HOST}" "${HOST_LOG}" \
+    push_host_code "${HOST_STAGE}" ||
+    stage_failed "the copy to ${HOST}" "${HOST_LOG}"
 
   # Upload: the total is the local file, and the host reports what has landed.
   probe_upload() { remote_size "${REMOTE_DIR}/pt_dump.guest"; }
@@ -677,7 +691,7 @@ else
   }
   PROBE_TEXT_CMD=probe_translate \
     run_logged "translating GPA -> HPA on ${HOST}" "${HOST_LOG}" \
-      on_host "cd '${HOST_REPO}' && ./PageTables/Host/run.sh '${REMOTE_DIR}/pt_dump.guest' \
+      on_host "cd '${HOST_STAGE}' && ./PageTables/Host/run.sh '${REMOTE_DIR}/pt_dump.guest' \
                --output '${REMOTE_DIR}/pt_dump.host'" ||
     stage_failed "the host translation" "${HOST_LOG}"
 

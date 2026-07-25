@@ -126,8 +126,9 @@ roughly 2.5 hours.
 
 ### Capture a workload yourself
 
-Requires a QEMU/KVM host–guest pair, and key-based SSH from the guest to the
-host. From inside the guest, this is the whole capture:
+Requires a QEMU/KVM host–guest pair and key-based SSH from the guest to the
+host. The artifact is only installed in the guest. From inside the guest, this
+is the whole capture:
 
 ```bash
 ./run.sh redis              # trace, both page tables, decode, simulate
@@ -135,8 +136,10 @@ host. From inside the guest, this is the whole capture:
 ```
 
 `run.sh` drives all five stages, including the trip to the KVM host: it copies
-the guest page table up, runs the translation there over SSH, and brings the
-result back. Point it elsewhere with `--host`, `--host-user` and `--host-repo`.
+the host tooling and the guest page table up, builds the translation module
+there against the host's own kernel, and brings the result back. **Nothing has
+to be installed on the host beforehand** — only kernel headers and key-based
+SSH. Point it elsewhere with `--host` and `--host-user`.
 Every stage checks for its own output first, so an interrupted run is simply
 re-run; `--force` redoes a stage that already finished. Because the trace and
 the page tables do not depend on the modelled machine, naming a second
