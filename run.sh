@@ -227,13 +227,15 @@ push_host_code() {
 ensure_prepared() {
   local prep="${REPO_ROOT}/scripts/prepare_system.sh"
 
+  # Unconditionally, on both machines, before anything is measured. Setting THP
+  # is idempotent, but dropping the page cache is not: it has to happen every
+  # run, or a capture inherits whatever the previous one left resident.
+
   # --- this guest -----------------------------------------------------------
   if [[ -x "${prep}" ]]; then
-    if ! "${prep}" --check > /dev/null 2>&1; then
-      ${SUDO:-} "${prep}" > /dev/null 2>&1 || true
-    fi
+    ${SUDO:-} "${prep}" > /dev/null 2>&1 || true
     if "${prep}" --check > /dev/null 2>&1; then
-      ui::ok "guest prepared  transparent huge pages disabled"
+      ui::ok "guest prepared  THP disabled, page cache dropped"
     else
       ui::warn "guest still reports transparent huge pages enabled"
       ui::note "run scripts/prepare_system.sh as root here"
@@ -241,25 +243,25 @@ ensure_prepared() {
   fi
 
   # --- the KVM host ---------------------------------------------------------
+  # The same four operations, over SSH. This is the only place in the artifact
+  # that reaches the host.
+  on_host 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+           echo never > /sys/kernel/mm/transparent_hugepage/defrag  2>/dev/null || true
+           sync
+           echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true' > /dev/null 2>&1 || true
+
   local mode
   mode="$(on_host 'sed -n "s/.*\[\([a-z+]*\)\].*/\1/p" /sys/kernel/mm/transparent_hugepage/enabled' 2> /dev/null || true)"
-  if [[ "${mode}" != never ]]; then
-    ui::info "host: transparent huge pages are '\''${mode:-unknown}'\''; disabling"
-    on_host 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null;
-             echo never > /sys/kernel/mm/transparent_hugepage/defrag  2>/dev/null;
-             sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null' > /dev/null 2>&1 || true
-    mode="$(on_host 'sed -n "s/.*\[\([a-z+]*\)\].*/\1/p" /sys/kernel/mm/transparent_hugepage/enabled' 2> /dev/null || true)"
-  fi
   if [[ "${mode}" == never ]]; then
-    ui::ok "host prepared  transparent huge pages disabled"
+    ui::ok "host prepared  THP disabled, page cache dropped"
   else
     ui::warn "host transparent huge pages are '\''${mode:-unknown}'\''"
     ui::note "the host page table will record 2 MB mappings and the walk will be short"
   fi
 
-  # Disabling THP stops new collapses but splits nothing already collapsed, so
-  # a guest whose RAM is on huge pages stays that way until it restarts. That
-  # is measurable, so it is reported rather than assumed away.
+  # Disabling THP stops new collapses but splits nothing already collapsed, so a
+  # guest whose RAM is on huge pages stays that way until it restarts. That is
+  # measurable, so it is reported rather than assumed away.
   local huge
   huge="$(on_host 'q=$(pgrep -f "qemu-system|qemu-kvm" | head -1);
                    [ -n "$q" ] && awk "/^AnonHugePages:/ {print \$2}" /proc/$q/smaps_rollup 2>/dev/null || echo 0' 2> /dev/null || echo 0)"
@@ -595,12 +597,32 @@ ui::step "Memory trace"
 
 TRACE_LOG="${LOG_DIR}/${WORKLOAD}.trace.log"
 
-if [[ -d "${OUTPUT_DIR}/drmemtrace.dir" && -f "${GUEST_PT}" ]] && (( ! FORCE_CAPTURE )); then
-  ui::ok "already captured  $(ui::relpath "${OUTPUT_DIR}/drmemtrace.dir" "${REPO_ROOT}") ($(ui::size_of "${OUTPUT_DIR}/drmemtrace.dir"))"
+# A capture directory is named drmemtrace.<binary>.<pid>.<tid>.dir, never
+# "drmemtrace.dir". Matching the literal name finds nothing, concludes there is
+# no capture, and falls through to the branch that deletes one.
+EXISTING_TRACE="$(find "${OUTPUT_DIR}" -maxdepth 1 -name 'drmemtrace*' -type d 2> /dev/null | sort | head -1)"
+
+if [[ -n "${EXISTING_TRACE}" && -f "${GUEST_PT}" ]] && (( ! FORCE_CAPTURE )); then
+  ui::ok "already captured  $(ui::relpath "${EXISTING_TRACE}" "${REPO_ROOT}") ($(ui::size_of "${EXISTING_TRACE}"))"
   ui::note "re-run with --force capture to capture again"
   SKIP_CAPTURE=1
 else
   SKIP_CAPTURE=0
+
+  # Nothing is deleted unless --force capture asked for it. A capture costs
+  # hours, and the page-table dumps cannot be remade at all once the traced
+  # process has exited, so a directory that looks incomplete stops the run
+  # rather than being cleared.
+  if [[ -e "${OUTPUT_DIR}" ]] && (( ! FORCE_CAPTURE )); then
+    UI_EXIT_CODE=2 ui::die "$(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}") exists but looks incomplete" \
+      "trace directory:  ${EXISTING_TRACE:-none found}" \
+      "guest page table: $([[ -f "${GUEST_PT}" ]] && echo present || echo missing)" \
+      "" \
+      "Nothing has been deleted. To capture again and discard what is there:" \
+      "    ./${PROG} ${WORKLOAD} --force capture" \
+      "or send this run elsewhere with --output DIR"
+  fi
+
   if [[ -e "${OUTPUT_DIR}" ]]; then
     ui::info "discarding the previous capture in $(ui::relpath "${OUTPUT_DIR}" "${REPO_ROOT}") ($(ui::size_of "${OUTPUT_DIR}"))"
     rm -rf "${OUTPUT_DIR}"
@@ -826,7 +848,7 @@ done
 # ------------------------------------------------------------------------------
 ui::result_banner ok "PIPELINE COMPLETE: ${WORKLOAD} (${ARCHES[*]})"
 ui::field "elapsed"  "$(ui::duration $(( SECONDS - RUN_START )))"
-ui::field "trace"    "$(ui::relpath "${OUTPUT_DIR}/drmemtrace.dir" "${REPO_ROOT}")"
+ui::field "trace"    "$(ui::relpath "${EXISTING_TRACE:-${OUTPUT_DIR}}" "${REPO_ROOT}")"
 ui::field "guest PT" "$(ui::relpath "${GUEST_PT}" "${REPO_ROOT}")"
 ui::field "host PT"  "$(ui::relpath "${HOST_PT}" "${REPO_ROOT}")"
 for arch in "${ARCHES[@]}"; do

@@ -220,6 +220,11 @@ find_reader() {
   for pid in $(pgrep -x drcachesim 2> /dev/null); do
     for fd in /proc/"${pid}"/fd/*; do
       target="$(readlink "${fd}" 2> /dev/null)" || continue
+      # An unlinked file still reads fine through its descriptor, but readlink
+      # reports it as "<path> (deleted)". Comparing the raw string then fails
+      # and the progress line never leaves "starting the simulation", while the
+      # run itself proceeds perfectly well.
+      target="${target% (deleted)}"
       [[ "${target}" == "${TRACE_FILE}" ]] || continue
       # While decoding, the very same process holds this file open for
       # *writing*: that descriptor's position is where raw2trace is appending,
