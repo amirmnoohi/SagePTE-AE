@@ -75,11 +75,11 @@ TOKENS = set(LATENCY) | RANGE_FLAGS
 # walk length -> (guest levels, host levels)
 WALK_SHAPES = {24: (4, 4), 15: (3, 3)}
 
-# Presentation order. TPT is reported by the paper but computed by a separate
-# tool, so it appears in the comparison columns with no measured counterpart.
-DESIGN_ORDER = ['Nested paging (NPW)', 'SagePTE', 'DMT', 'ECPT', 'FPT',
+# Presentation order. PAPER_ONLY lists designs the paper reports but the
+# simulator does not model; they appear with a paper column and no measurement.
+DESIGN_ORDER = ['Nested paging (NPW)', 'SagePTE', 'TPT', 'DMT', 'ECPT', 'FPT',
                 'ASAP', 'Agile Paging']
-PAPER_ONLY = ['TPT']
+PAPER_ONLY = []
 
 # ------------------------------------------------------------------------------
 # Reference values from the paper, generated from SagePTE-MICRO/numbers/.
@@ -213,15 +213,24 @@ def formulas_for(g_levels, h_levels):
         return (asap_prefetch(*actual) +
                 asap_prefetch(*(d[k] for k in UD)))
 
+    def tpt(d):
+        # Host physical addresses are written into the guest page table itself,
+        # so a walk needs neither a host walk for the page-table pages nor the
+        # h-final step: the guest levels alone resolve the address. Isolation
+        # is what costs. The guest is trusted with those addresses, so every
+        # guest page-table access is paired with a read of an out-of-band
+        # permission table, which the paper reports caching much like the
+        # access it guards -- hence the same latency as its partner.
+        return 2 * sum(d[k] for k in G)
+
     def agile(d):
         # Shadow mode for the guest dimension + one final host walk.
         return sum(d[k] for k in G) + sum(d[k] for k in UD)
 
-    # TPT is not part of Formula.cs (it was computed by a separate tool);
-    # add its delegate here when its formula is available.
     return {
         'Nested paging (NPW)': npw,
         'SagePTE': sagepte,
+        'TPT': tpt,
         'DMT': dmt,
         'ECPT': ecpt,
         'FPT': fpt,
@@ -295,6 +304,11 @@ def tally(records, g_levels, h_levels):
 # Reporting
 # ------------------------------------------------------------------------------
 
+WIDTH = 78
+RULE = '  ' + '-' * (WIDTH - 4)
+CLOSE_ENOUGH = 3.0      # percent; the threshold the closing summary sorts on
+
+
 def pct_delta(measured, reference):
     """Relative difference, as a signed percentage."""
     if not reference:
@@ -302,8 +316,16 @@ def pct_delta(measured, reference):
     return (measured / reference - 1.0) * 100.0
 
 
-def fmt_delta(value, unit='%'):
-    return '--' if value is None else f'{value:+.1f}{unit}'
+def fmt_delta(value):
+    return '-' if value is None else f'{value:+.1f}%'
+
+
+def bar(value, ceiling, width=14):
+    """A proportional bar. Speedups start at 1.0, so that is where it starts."""
+    if ceiling <= 1.0:
+        return ''
+    filled = int(round((value - 1.0) / (ceiling - 1.0) * width))
+    return '#' * max(filled, 0)
 
 
 def infer_workload(path):
@@ -321,105 +343,137 @@ def infer_config(path):
     return m.group(1) if m else None
 
 
-def print_header(path, workload, config, page, total, range_hits):
-    print('=' * 78)
-    print(' SagePTE — page-walk analysis')
-    print('=' * 78)
-    print(f'  workload      {workload or "unknown"}')
-    print(f'  configuration {config or "unknown"}')
-    print(f'  page size     {page}')
-    print(f'  source        {path}')
-    print(f'  page walks    {total:,} post-warmup')
-    print(f'  DMT range     {range_hits / total * 100:.2f}% of walks covered')
+def section(title):
     print()
+    print(f'  {title}')
+    print(RULE)
+
+
+def print_header(path, workload, config, page, total, range_hits):
+    print('=' * WIDTH)
+    print('  SagePTE -- page-walk analysis')
+    print('=' * WIDTH)
+    print(f'  {"workload":<15}{workload or "unknown":<26}'
+          f'{"page size":<14}{page}')
+    print(f'  {"configuration":<15}{config or "unknown":<26}'
+          f'{"page walks":<14}{total:,}')
+    print(f'  {"source":<15}{path}')
+    print(f'  {"DMT range":<15}{range_hits / total * 100:.2f}% of walks covered')
 
 
 def print_references(by_label, g_levels, h_levels):
-    print('PER-REFERENCE LATENCY (cycles)')
+    section('PER-REFERENCE LATENCY (cycles)')
+    head = f'    {"":<10}' + ''.join(f'{f"H{h}":>10}' for h in range(1, h_levels + 1))
+    print(head + f'{"guest":>10}')
     for g in range(1, g_levels + 1):
-        row = [f'G{g}H{h}' for h in range(1, h_levels + 1)] + [f'G{g}']
-        print('  ' + '  '.join(f'{l}={by_label[l]:7.2f}' for l in row))
-    print('  ' + '  '.join(f'UDH{h}={by_label[f"UDH{h}"]:7.2f}'
-                           for h in range(1, h_levels + 1)))
-    print()
+        row = ''.join(f'{by_label[f"G{g}H{h}"]:>10.2f}' for h in range(1, h_levels + 1))
+        print(f'    {f"G{g}":<10}' + row + f'{by_label[f"G{g}"]:>10.2f}')
+    row = ''.join(f'{by_label[f"UDH{h}"]:>10.2f}' for h in range(1, h_levels + 1))
+    print(f'    {"h-final":<10}' + row + f'{"-":>10}')
 
 
 def print_hfinal(by_label, npw, h_levels, paper_shares):
-    print('H-FINAL PHASE  (the terminal Stage-2 walk SagePTE eliminates)')
     total = sum(by_label[f'UDH{h}'] for h in range(1, h_levels + 1))
-    compare = paper_shares and len(paper_shares) == h_levels
-    head = f'  {"":<10}{"cycles":>10}{"share":>10}'
+    section(f'H-FINAL PHASE -- the terminal Stage-2 walk SagePTE removes')
+    compare = bool(paper_shares) and len(paper_shares) == h_levels
+    head = f'    {"level":<10}{"cycles":>10}{"share":>10}'
     if compare:
-        head += f'{"paper":>10}{"delta":>12}'
+        head += f'{"paper":>10}{"delta":>11}'
     print(head)
     for h in range(1, h_levels + 1):
-        share = by_label[f'UDH{h}'] / npw * 100
-        line = f'  {"UDH" + str(h):<10}{by_label[f"UDH{h}"]:>10.2f}{share:>9.2f}%'
+        cyc = by_label[f'UDH{h}']
+        share = cyc / npw * 100
+        line = f'    {f"UDH{h}":<10}{cyc:>10.2f}{share:>9.2f}%'
         if compare:
             ref = paper_shares[h - 1]
-            line += f'{ref:>9.2f}%{share - ref:>+11.2f}pp'
+            line += f'{ref:>9.2f}%{share - ref:>+10.2f}pp'
         print(line)
     share = total / npw * 100
-    line = f'  {"total":<10}{total:>10.2f}{share:>9.2f}%'
+    line = f'    {"total":<10}{total:>10.2f}{share:>9.2f}%'
     if compare:
         ref = sum(paper_shares)
-        line += f'{ref:>9.2f}%{share - ref:>+11.2f}pp'
+        line += f'{ref:>9.2f}%{share - ref:>+10.2f}pp'
     print(line)
-    print()
 
 
 def print_walk_table(title, by_design, paper_walk):
-    print(title)
+    section(title)
     npw = by_design['Nested paging (NPW)']
+    speedups = {n: npw / by_design[n] for n in DESIGN_ORDER if n in by_design}
+    ceiling = max(speedups.values())
     compare = bool(paper_walk)
-    head = f'  {"Design":<22}{"cycles":>10}{"speedup":>10}'
+    head = f'    {"design":<20}{"cycles":>9}{"speedup":>9}  {"":<14}'
     if compare:
-        head += f'{"paper":>10}{"delta":>10}'
+        head += f'{"paper":>9}{"delta":>9}'
     print(head)
     for name in DESIGN_ORDER:
         if name not in by_design:
             continue
-        lat = by_design[name]
-        speedup = npw / lat if lat > 0 else float('inf')
-        line = f'  {name:<22}{lat:>10.2f}{speedup:>9.2f}x'
+        speedup = speedups[name]
+        line = (f'    {name:<20}{by_design[name]:>9.2f}{speedup:>8.2f}x  '
+                f'{bar(speedup, ceiling):<14}')
         if compare:
-            ref = paper_walk.get('Nested paging (NPW)' if name.startswith('Nested')
-                                 else name)
+            # Nested paging is the baseline every speedup is taken against, so
+            # it has nothing to differ from.
             if name.startswith('Nested'):
-                ref = 1.0
-            line += (f'{ref:>9.2f}x{fmt_delta(pct_delta(speedup, ref)):>10}'
-                     if ref else f'{"--":>10}{"--":>10}')
-        print(line)
-    if compare:
-        for name in PAPER_ONLY:
-            ref = paper_walk.get(name)
-            if ref:
-                print(f'  {name:<22}{"--":>10}{"--":>10}{ref:>9.2f}x'
-                      f'{"not simulated":>16}')
-    print()
+                line += f'{"1.00x":>9}{"-":>9}'
+            else:
+                ref = paper_walk.get(name)
+                line += (f'{ref:>8.2f}x{fmt_delta(pct_delta(speedup, ref)):>9}'
+                         if ref else f'{"-":>9}{"-":>9}')
+        print(line.rstrip())
+    for name in PAPER_ONLY:
+        ref = paper_walk.get(name) if paper_walk else None
+        if ref:
+            print(f'    {name:<20}{"-":>9}{"-":>9}  {"":<14}{ref:>8.2f}x'
+                  f'{"not modelled":>9}')
 
 
 def print_e2e_table(title, by_design, fraction, paper_e2e):
-    print(title)
-    print(f'  page-walk fraction of execution time  f = {fraction * 100:.2f}%')
+    section(title)
+    print(f'    Eq. (4) with f = {fraction * 100:.2f}% of execution time in page walks')
+    print()
     npw = by_design['Nested paging (NPW)']
+    rows = [(n, npw / by_design[n]) for n in DESIGN_ORDER
+            if n in by_design and not n.startswith('Nested')]
+    e2e = {n: end_to_end(s, fraction) for n, s in rows}
+    ceiling = max(e2e.values())
     compare = bool(paper_e2e)
-    head = f'  {"Design":<22}{"walk":>10}{"end-to-end":>12}'
+    head = f'    {"design":<20}{"walk":>9}{"overall":>9}  {"":<14}'
     if compare:
-        head += f'{"paper":>10}{"delta":>10}'
+        head += f'{"paper":>9}{"delta":>9}'
     print(head)
+    for name, speedup in rows:
+        line = (f'    {name:<20}{speedup:>8.2f}x{e2e[name]:>8.3f}x  '
+                f'{bar(e2e[name], ceiling):<14}')
+        if compare:
+            ref = paper_e2e.get(name)
+            line += (f'{ref:>8.3f}x{fmt_delta(pct_delta(e2e[name], ref)):>9}'
+                     if ref else f'{"-":>9}{"-":>9}')
+        print(line.rstrip())
+
+
+def print_agreement(by_design, paper_walk):
+    """Sort the designs by how well the replay reproduced the paper."""
+    if not paper_walk:
+        return
+    npw = by_design['Nested paging (NPW)']
+    near, far = [], []
     for name in DESIGN_ORDER:
         if name not in by_design or name.startswith('Nested'):
             continue
-        speedup = npw / by_design[name]
-        e2e = end_to_end(speedup, fraction)
-        line = f'  {name:<22}{speedup:>9.2f}x{e2e:>11.3f}x'
-        if compare:
-            ref = paper_e2e.get(name)
-            line += (f'{ref:>9.3f}x{fmt_delta(pct_delta(e2e, ref)):>10}'
-                     if ref else f'{"--":>10}{"--":>10}')
-        print(line)
-    print()
+        ref = paper_walk.get(name)
+        if not ref:
+            continue
+        delta = pct_delta(npw / by_design[name], ref)
+        (near if abs(delta) <= CLOSE_ENOUGH else far).append((name, delta))
+    section('AGREEMENT WITH THE PAPER (page-walk speedup)')
+    if near:
+        print(f'    within {CLOSE_ENOUGH:.0f}%   ' +
+              ', '.join(f'{n} ({d:+.1f}%)' for n, d in near))
+    if far:
+        print(f'    beyond {CLOSE_ENOUGH:.0f}%   ' +
+              ', '.join(f'{n} ({d:+.1f}%)' for n, d in far))
 
 
 def analyze(path, workload=None, config=None, compare=True):
@@ -433,7 +487,8 @@ def analyze(path, workload=None, config=None, compare=True):
         print(f'{path}: warning: mixed walk lengths, using {n_refs}-ref records only')
         records = [r for r in records if len(r[0]) == n_refs]
     if n_refs not in WALK_SHAPES:
-        print(f'{path}: unsupported walk length {n_refs} (expected 24 for 4KB or 15 for 2MB)')
+        print(f'{path}: unsupported walk length {n_refs} '
+              f'(expected 24 for 4KB or 15 for 2MB)')
         return
 
     g_levels, h_levels = WALK_SHAPES[n_refs]
@@ -445,25 +500,25 @@ def analyze(path, workload=None, config=None, compare=True):
     total, by_label, by_design = tally(records, g_levels, h_levels)
     range_hits = sum(c for _, flag, c in records if flag == 'RANGE_HIT')
     npw = by_design['Nested paging (NPW)']
+    tag = '4k' if is_4k else 'thp'
 
     print_header(path, workload, config, '4 KB' if is_4k else '2 MB (THP)',
                  total, range_hits)
     print_references(by_label, g_levels, h_levels)
     print_hfinal(by_label, npw, h_levels,
-                 ref.get('hfinal_4k' if is_4k else 'hfinal_thp') if ref else None)
-
-    tag = '4k' if is_4k else 'thp'
-    print_walk_table(f'PAGE-WALK LATENCY  ({"4 KB" if is_4k else "2 MB"} pages)',
+                 ref.get(f'hfinal_{tag}') if ref else None)
+    print_walk_table(f'PAGE-WALK LATENCY -- {"4 KB" if is_4k else "2 MB"} pages',
                      by_design, ref.get(f'walk_{tag}') if ref else None)
-
     if ref and ref.get(f'frac_{tag}'):
-        print_e2e_table('END-TO-END SPEEDUP  (Eq. 4)', by_design,
-                        ref[f'frac_{tag}'], ref.get(f'e2e_{tag}'))
-
-    if compare and not ref:
-        print(f'  (no paper reference for workload "{workload}"; '
-              f'known: {", ".join(sorted(PAPER))})')
+        print_e2e_table('END-TO-END SPEEDUP', by_design, ref[f'frac_{tag}'],
+                        ref.get(f'e2e_{tag}'))
+    if ref:
+        print_agreement(by_design, ref.get(f'walk_{tag}'))
+    elif compare:
         print()
+        print(f'  no paper reference for workload "{workload}"; '
+              f'known: {", ".join(sorted(PAPER))}')
+    print()
 
 
 def main():
