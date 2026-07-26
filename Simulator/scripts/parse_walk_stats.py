@@ -45,6 +45,9 @@ Options:
     --workload NAME   workload to compare against (default: inferred from path)
     --config NAME     configuration label for the header (default: inferred)
     --no-compare      omit the paper columns; report measurements only
+    --color           force colour on (default: on when writing to a terminal)
+    --no-color        force colour off
+    --ascii           plain ASCII box drawing
 """
 
 import os
@@ -302,30 +305,85 @@ def tally(records, g_levels, h_levels):
 
 # ------------------------------------------------------------------------------
 # Reporting
+#
+# The presentation follows Lib/ui.sh so a report reads like the rest of the
+# artifact: a rounded banner, cyan section rules, dim labels. Colour is used
+# only on a terminal, so a report redirected to analysis_<config>.txt stays
+# plain text.
 # ------------------------------------------------------------------------------
 
 WIDTH = 78
-RULE = '  ' + '-' * (WIDTH - 4)
-CLOSE_ENOUGH = 3.0      # percent; the threshold the closing summary sorts on
+CLOSE_ENOUGH = 3.0      # percent; how near the paper counts as reproduced
+
+UNICODE = True
+COLOR = False
+
+
+class G:
+    """Glyphs, swapped for ASCII where the terminal cannot show them."""
+    TL, TR, BL, BR, H, V = '/', '\\', '\\', '/', '-', '|'
+    BAR, DASH = '#', '-'
+
+
+def set_style(unicode_ok, color_ok):
+    global UNICODE, COLOR
+    UNICODE, COLOR = unicode_ok, color_ok
+    if unicode_ok:
+        G.TL, G.TR, G.BL, G.BR, G.H, G.V = '╭', '╮', '╰', '╯', '─', '│'
+        G.BAR, G.DASH = '▇', '—'
+
+
+def c(text, *codes):
+    """Wrap text in SGR codes, or return it untouched when colour is off."""
+    if not COLOR or not codes:
+        return text
+    return '\033[' + ';'.join(codes) + 'm' + text + '\033[0m'
+
+
+BOLD, DIM, GREEN, YELLOW, CYAN, BLUE = '1', '2', '32', '33', '36', '34'
+
+
+def banner(title, subtitle):
+    inner = WIDTH - 2
+    print()
+    print(c(G.TL + G.H * inner + G.TR, BLUE))
+    for text, style in ((title, BOLD), (subtitle, DIM)):
+        pad = inner - 2 - len(text)
+        print(c(G.V, BLUE) + '  ' + c(text, style) + ' ' * pad + c(G.V, BLUE))
+    print(c(G.BL + G.H * inner + G.BR, BLUE))
+
+
+def section(title):
+    label = f' {title} '
+    fill = WIDTH - len(label) - 4
+    print()
+    print(c(G.H * 4, CYAN) + c(label, BOLD) + c(G.H * max(fill, 0), CYAN))
+
+
+def field(label, value, width=20):
+    print(f'  {c(f"{label:<{width}}", DIM)}{value}')
+
+
+def fmt_delta(value, unit='%'):
+    """A signed difference, green when the replay landed near the paper."""
+    if value is None:
+        return c(f'{G.DASH:>8}', DIM)
+    text = f'{value:+.1f}{unit}'
+    return c(f'{text:>8}', GREEN if abs(value) <= CLOSE_ENOUGH else YELLOW)
 
 
 def pct_delta(measured, reference):
-    """Relative difference, as a signed percentage."""
     if not reference:
         return None
     return (measured / reference - 1.0) * 100.0
 
 
-def fmt_delta(value):
-    return '-' if value is None else f'{value:+.1f}%'
-
-
 def bar(value, ceiling, width=14):
-    """A proportional bar. Speedups start at 1.0, so that is where it starts."""
+    """A bar proportional to the gain over the 1.0x baseline."""
     if ceiling <= 1.0:
-        return ''
-    filled = int(round((value - 1.0) / (ceiling - 1.0) * width))
-    return '#' * max(filled, 0)
+        return ' ' * width
+    filled = max(int(round((value - 1.0) / (ceiling - 1.0) * width)), 0)
+    return c(G.BAR * filled, CYAN) + ' ' * (width - filled)
 
 
 def infer_workload(path):
@@ -343,137 +401,144 @@ def infer_config(path):
     return m.group(1) if m else None
 
 
-def section(title):
-    print()
-    print(f'  {title}')
-    print(RULE)
+def print_summary(path, total, range_hits, hfinal_share, walk, e2e, ref, tag):
+    section('Summary')
+    paper_h = sum(ref[f'hfinal_{tag}']) if ref and ref.get(f'hfinal_{tag}') else None
+    paper_w = ref[f'walk_{tag}'].get('SagePTE') if ref else None
+    paper_e = ref[f'e2e_{tag}'].get('SagePTE') if ref else None
 
-
-def print_header(path, workload, config, page, total, range_hits):
-    print('=' * WIDTH)
-    print('  SagePTE -- page-walk analysis')
-    print('=' * WIDTH)
-    print(f'  {"workload":<15}{workload or "unknown":<26}'
-          f'{"page size":<14}{page}')
-    print(f'  {"configuration":<15}{config or "unknown":<26}'
-          f'{"page walks":<14}{total:,}')
-    print(f'  {"source":<15}{path}')
-    print(f'  {"DMT range":<15}{range_hits / total * 100:.2f}% of walks covered')
-
-
-def print_references(by_label, g_levels, h_levels):
-    section('PER-REFERENCE LATENCY (cycles)')
-    head = f'    {"":<10}' + ''.join(f'{f"H{h}":>10}' for h in range(1, h_levels + 1))
-    print(head + f'{"guest":>10}')
-    for g in range(1, g_levels + 1):
-        row = ''.join(f'{by_label[f"G{g}H{h}"]:>10.2f}' for h in range(1, h_levels + 1))
-        print(f'    {f"G{g}":<10}' + row + f'{by_label[f"G{g}"]:>10.2f}')
-    row = ''.join(f'{by_label[f"UDH{h}"]:>10.2f}' for h in range(1, h_levels + 1))
-    print(f'    {"h-final":<10}' + row + f'{"-":>10}')
-
-
-def print_hfinal(by_label, npw, h_levels, paper_shares):
-    total = sum(by_label[f'UDH{h}'] for h in range(1, h_levels + 1))
-    section(f'H-FINAL PHASE -- the terminal Stage-2 walk SagePTE removes')
-    compare = bool(paper_shares) and len(paper_shares) == h_levels
-    head = f'    {"level":<10}{"cycles":>10}{"share":>10}'
-    if compare:
-        head += f'{"paper":>10}{"delta":>11}'
-    print(head)
-    for h in range(1, h_levels + 1):
-        cyc = by_label[f'UDH{h}']
-        share = cyc / npw * 100
-        line = f'    {f"UDH{h}":<10}{cyc:>10.2f}{share:>9.2f}%'
-        if compare:
-            ref = paper_shares[h - 1]
-            line += f'{ref:>9.2f}%{share - ref:>+10.2f}pp'
+    rows = [('h-final share of walk', f'{hfinal_share:>8.2f}%', paper_h,
+             f'{paper_h:.2f}%' if paper_h else None,
+             (hfinal_share - paper_h) if paper_h else None, 'pp'),
+            ('SagePTE page-walk', f'{walk:>8.2f}x', paper_w,
+             f'{paper_w:.2f}x' if paper_w else None,
+             pct_delta(walk, paper_w), '%'),
+            ('SagePTE end-to-end', f'{e2e:>8.3f}x', paper_e,
+             f'{paper_e:.3f}x' if paper_e else None,
+             pct_delta(e2e, paper_e), '%')]
+    for label, value, paper, paper_txt, delta, unit in rows:
+        line = f'  {c(f"{label:<24}", DIM)}{value}'
+        if paper:
+            line += f'   {c("paper", DIM)} {paper_txt:>8}  {fmt_delta(delta, unit)}'
         print(line)
-    share = total / npw * 100
-    line = f'    {"total":<10}{total:>10.2f}{share:>9.2f}%'
-    if compare:
-        ref = sum(paper_shares)
-        line += f'{ref:>9.2f}%{share - ref:>+10.2f}pp'
-    print(line)
+    print()
+    field('page walks', f'{total:,}', 24)
+    field('DMT range coverage', f'{range_hits / total * 100:.2f}%', 24)
+    field('source', path, 24)
 
 
-def print_walk_table(title, by_design, paper_walk):
-    section(title)
+def print_walk_table(by_design, paper_walk):
+    section('Page-walk latency')
     npw = by_design['Nested paging (NPW)']
     speedups = {n: npw / by_design[n] for n in DESIGN_ORDER if n in by_design}
     ceiling = max(speedups.values())
-    compare = bool(paper_walk)
-    head = f'    {"design":<20}{"cycles":>9}{"speedup":>9}  {"":<14}'
-    if compare:
-        head += f'{"paper":>9}{"delta":>9}'
-    print(head)
+    header = f'  {"design":<20}{"cycles":>9}{"speedup":>9}  {"":<14}'
+    if paper_walk:
+        header += f'{"paper":>9}{"diff":>9}'
+    print(c(header, DIM))
     for name in DESIGN_ORDER:
         if name not in by_design:
             continue
         speedup = speedups[name]
-        line = (f'    {name:<20}{by_design[name]:>9.2f}{speedup:>8.2f}x  '
-                f'{bar(speedup, ceiling):<14}')
-        if compare:
-            # Nested paging is the baseline every speedup is taken against, so
-            # it has nothing to differ from.
+        label = c(f'{name:<20}', BOLD) if name == 'SagePTE' else f'{name:<20}'
+        line = f'  {label}{by_design[name]:>9.2f}{speedup:>8.2f}x  {bar(speedup, ceiling)}'
+        if paper_walk:
             if name.startswith('Nested'):
-                line += f'{"1.00x":>9}{"-":>9}'
+                line += f'{"baseline":>18}'
             else:
-                ref = paper_walk.get(name)
-                line += (f'{ref:>8.2f}x{fmt_delta(pct_delta(speedup, ref)):>9}'
-                         if ref else f'{"-":>9}{"-":>9}')
+                paper = paper_walk.get(name)
+                line += (f'{paper:>8.2f}x {fmt_delta(pct_delta(speedup, paper))}'
+                         if paper else f'{G.DASH:>9}{G.DASH:>9}')
         print(line.rstrip())
     for name in PAPER_ONLY:
-        ref = paper_walk.get(name) if paper_walk else None
-        if ref:
-            print(f'    {name:<20}{"-":>9}{"-":>9}  {"":<14}{ref:>8.2f}x'
-                  f'{"not modelled":>9}')
+        paper = paper_walk.get(name) if paper_walk else None
+        if paper:
+            print(f'  {name:<20}{G.DASH:>9}{G.DASH:>9}  {"":<14}{paper:>8.2f}x'
+                  f'{c(" not modelled", DIM)}')
 
 
-def print_e2e_table(title, by_design, fraction, paper_e2e):
-    section(title)
-    print(f'    Eq. (4) with f = {fraction * 100:.2f}% of execution time in page walks')
+def print_e2e_table(by_design, fraction, paper_e2e):
+    section('End-to-end speedup')
+    print(f'  {c("Eq. (4), with", DIM)} {fraction * 100:.2f}% '
+          f'{c("of execution time spent walking page tables", DIM)}')
     print()
     npw = by_design['Nested paging (NPW)']
-    rows = [(n, npw / by_design[n]) for n in DESIGN_ORDER
-            if n in by_design and not n.startswith('Nested')]
-    e2e = {n: end_to_end(s, fraction) for n, s in rows}
-    ceiling = max(e2e.values())
-    compare = bool(paper_e2e)
-    head = f'    {"design":<20}{"walk":>9}{"overall":>9}  {"":<14}'
-    if compare:
-        head += f'{"paper":>9}{"delta":>9}'
-    print(head)
-    for name, speedup in rows:
-        line = (f'    {name:<20}{speedup:>8.2f}x{e2e[name]:>8.3f}x  '
-                f'{bar(e2e[name], ceiling):<14}')
-        if compare:
-            ref = paper_e2e.get(name)
-            line += (f'{ref:>8.3f}x{fmt_delta(pct_delta(e2e[name], ref)):>9}'
-                     if ref else f'{"-":>9}{"-":>9}')
+    rows = [(n, npw / by_design[n], end_to_end(npw / by_design[n], fraction))
+            for n in DESIGN_ORDER if n in by_design and not n.startswith('Nested')]
+    ceiling = max(v for _, _, v in rows)
+    # Same column skeleton as the page-walk table, so the bars line up and the
+    # walk speedup feeding Eq. (4) sits beside the result it produces.
+    header = f'  {"design":<20}{"walk":>9}{"overall":>9}  {"":<14}'
+    if paper_e2e:
+        header += f'{"paper":>9}{"diff":>9}'
+    print(c(header, DIM))
+    for name, speedup, value in rows:
+        label = c(f'{name:<20}', BOLD) if name == 'SagePTE' else f'{name:<20}'
+        line = f'  {label}{speedup:>8.2f}x{value:>8.3f}x  {bar(value, ceiling)}'
+        if paper_e2e:
+            paper = paper_e2e.get(name)
+            line += (f'{paper:>8.3f}x {fmt_delta(pct_delta(value, paper))}'
+                     if paper else f'{G.DASH:>9}{G.DASH:>9}')
         print(line.rstrip())
 
 
-def print_agreement(by_design, paper_walk):
-    """Sort the designs by how well the replay reproduced the paper."""
+def print_composition(by_label, npw, g_levels, h_levels, paper_shares):
+    section('Walk composition')
+    print(f'  {c("cycles per reference, host levels across, guest levels down", DIM)}')
+    print()
+    head = f'    {"":<10}' + ''.join(f'{f"H{h}":>9}' for h in range(1, h_levels + 1))
+    print(c(head + f'{"guest":>9}', DIM))
+    for g in range(1, g_levels + 1):
+        cells = ''.join(f'{by_label[f"G{g}H{h}"]:>9.2f}' for h in range(1, h_levels + 1))
+        print('    ' + c(f'G{g}'.ljust(10), DIM) +
+              f'{cells}{by_label[f"G{g}"]:>9.2f}')
+    cells = ''.join(f'{by_label[f"UDH{h}"]:>9.2f}' for h in range(1, h_levels + 1))
+    print('    ' + c('h-final'.ljust(10), DIM) + cells + f'{G.DASH:>9}')
+
+    total = sum(by_label[f'UDH{h}'] for h in range(1, h_levels + 1))
+    print()
+    print(f'  {c("the h-final row is the terminal Stage-2 walk SagePTE removes", DIM)}')
+    print()
+    head = f'    {"level":<10}{"cycles":>9}{"share":>9}'
+    if paper_shares and len(paper_shares) == h_levels:
+        head += f'{"paper":>9}{"diff":>11}'
+    print(c(head, DIM))
+    for h in range(1, h_levels + 1):
+        cyc = by_label[f'UDH{h}']
+        share = cyc / npw * 100
+        line = f'    {f"UDH{h}":<10}{cyc:>9.2f}{share:>8.2f}%'
+        if paper_shares and len(paper_shares) == h_levels:
+            line += f'{paper_shares[h - 1]:>8.2f}%{share - paper_shares[h - 1]:>+10.2f}pp'
+        print(line)
+    line = ('    ' + c('total'.ljust(10), BOLD) +
+            f'{total:>9.2f}{total / npw * 100:>8.2f}%')
+    if paper_shares and len(paper_shares) == h_levels:
+        ref_total = sum(paper_shares)
+        line += f'{ref_total:>8.2f}%{total / npw * 100 - ref_total:>+10.2f}pp'
+    print(line)
+
+
+def print_notes(by_design, paper_walk):
     if not paper_walk:
         return
     npw = by_design['Nested paging (NPW)']
-    near, far = [], []
+    far = []
     for name in DESIGN_ORDER:
         if name not in by_design or name.startswith('Nested'):
             continue
-        ref = paper_walk.get(name)
-        if not ref:
+        paper = paper_walk.get(name)
+        if not paper:
             continue
-        delta = pct_delta(npw / by_design[name], ref)
-        (near if abs(delta) <= CLOSE_ENOUGH else far).append((name, delta))
-    section('AGREEMENT WITH THE PAPER (page-walk speedup)')
-    if near:
-        print(f'    within {CLOSE_ENOUGH:.0f}%   ' +
-              ', '.join(f'{n} ({d:+.1f}%)' for n, d in near))
+        delta = pct_delta(npw / by_design[name], paper)
+        if abs(delta) > CLOSE_ENOUGH:
+            far.append(f'{name} ({delta:+.1f}%)')
+    section('Notes')
     if far:
-        print(f'    beyond {CLOSE_ENOUGH:.0f}%   ' +
-              ', '.join(f'{n} ({d:+.1f}%)' for n, d in far))
+        print(f'  {len(far)} designs differ from the paper by more than '
+              f'{CLOSE_ENOUGH:.0f}%:')
+        print(f'    {", ".join(far)}')
+    else:
+        print(f'  every design is within {CLOSE_ENOUGH:.0f}% of the paper')
 
 
 def analyze(path, workload=None, config=None, compare=True):
@@ -496,28 +561,33 @@ def analyze(path, workload=None, config=None, compare=True):
     workload = workload or infer_workload(path)
     config = config or infer_config(path)
     ref = PAPER.get(workload) if compare else None
+    tag = '4k' if is_4k else 'thp'
 
     total, by_label, by_design = tally(records, g_levels, h_levels)
     range_hits = sum(c for _, flag, c in records if flag == 'RANGE_HIT')
     npw = by_design['Nested paging (NPW)']
-    tag = '4k' if is_4k else 'thp'
+    hfinal = sum(by_label[f'UDH{h}'] for h in range(1, h_levels + 1))
+    walk_speedup = npw / by_design['SagePTE']
+    fraction = ref.get(f'frac_{tag}') if ref else None
+    e2e = end_to_end(walk_speedup, fraction) if fraction else float('nan')
 
-    print_header(path, workload, config, '4 KB' if is_4k else '2 MB (THP)',
-                 total, range_hits)
-    print_references(by_label, g_levels, h_levels)
-    print_hfinal(by_label, npw, h_levels,
-                 ref.get(f'hfinal_{tag}') if ref else None)
-    print_walk_table(f'PAGE-WALK LATENCY -- {"4 KB" if is_4k else "2 MB"} pages',
-                     by_design, ref.get(f'walk_{tag}') if ref else None)
-    if ref and ref.get(f'frac_{tag}'):
-        print_e2e_table('END-TO-END SPEEDUP', by_design, ref[f'frac_{tag}'],
-                        ref.get(f'e2e_{tag}'))
+    subtitle = '   '.join(filter(None, [
+        workload or 'unknown workload', config,
+        '4 KB pages' if is_4k else '2 MB pages (THP)']))
+    banner('SagePTE  --  page-walk analysis', subtitle)
+    print_summary(path, total, range_hits, hfinal / npw * 100,
+                  walk_speedup, e2e, ref, tag)
+    print_walk_table(by_design, ref.get(f'walk_{tag}') if ref else None)
+    if fraction:
+        print_e2e_table(by_design, fraction, ref.get(f'e2e_{tag}'))
+    print_composition(by_label, npw, g_levels, h_levels,
+                      ref.get(f'hfinal_{tag}') if ref else None)
     if ref:
-        print_agreement(by_design, ref.get(f'walk_{tag}'))
+        print_notes(by_design, ref.get(f'walk_{tag}'))
     elif compare:
-        print()
-        print(f'  no paper reference for workload "{workload}"; '
-              f'known: {", ".join(sorted(PAPER))}')
+        section('Notes')
+        print(f'  no paper reference for workload "{workload}"')
+        print(f'  known workloads: {", ".join(sorted(PAPER))}')
     print()
 
 
@@ -525,6 +595,8 @@ def main():
     args = sys.argv[1:]
     workload = config = None
     compare = True
+    color = sys.stdout.isatty()
+    unicode_ok = (sys.stdout.encoding or '').lower().startswith('utf')
     paths = []
     while args:
         a = args.pop(0)
@@ -534,6 +606,12 @@ def main():
             config = args.pop(0)
         elif a == '--no-compare':
             compare = False
+        elif a == '--color':
+            color = True
+        elif a == '--no-color':
+            color = False
+        elif a == '--ascii':
+            unicode_ok = False
         elif a in ('-h', '--help'):
             print(__doc__)
             return
@@ -542,6 +620,7 @@ def main():
     if not paths:
         print(__doc__)
         sys.exit(1)
+    set_style(unicode_ok, color)
     for path in paths:
         analyze(path, workload, config, compare)
 
