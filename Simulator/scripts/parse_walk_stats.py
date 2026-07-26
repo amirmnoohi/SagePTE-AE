@@ -53,6 +53,7 @@ Options:
 import os
 import re
 import sys
+import textwrap
 
 # Cycle cost of a page-walk reference served by each component (Constants).
 LATENCY = {
@@ -83,6 +84,9 @@ WALK_SHAPES = {24: (4, 4), 15: (3, 3)}
 DESIGN_ORDER = ['Nested paging (NPW)', 'SagePTE', 'TPT', 'DMT', 'ECPT', 'FPT',
                 'ASAP', 'Agile Paging']
 PAPER_ONLY = []
+
+# The design under evaluation; its rows are marked so a reader finds them.
+OURS = 'SagePTE'
 
 # ------------------------------------------------------------------------------
 # Reference values from the paper, generated from SagePTE-MICRO/numbers/.
@@ -278,10 +282,12 @@ def parse_log(path):
     return records
 
 
-def tally(records, g_levels, h_levels):
+def tally(records, g_levels, h_levels, project=None):
     """Weighted averages for one walk shape.
 
     Returns (total_walks, {label: avg cycles}, {design: avg cycles}).
+    `project` optionally rewrites each record's reference list, which is how
+    the 2 MB walk is obtained from a 4 KB capture; see derive_thp().
     """
     labels = labels_for(g_levels, h_levels)
     designs = formulas_for(g_levels, h_levels)
@@ -290,7 +296,7 @@ def tally(records, g_levels, h_levels):
     design_sum = {name: 0.0 for name in designs}
 
     for refs, _, count in records:
-        lat = [LATENCY[t] for t in refs]
+        lat = [LATENCY[t] for t in (project(refs) if project else refs)]
         for i, v in enumerate(lat):
             ref_sum[i] += v * count
         d = dict(zip(labels, lat))
@@ -301,6 +307,24 @@ def tally(records, g_levels, h_levels):
     by_label = {l: s / total for l, s in zip(labels, ref_sum)}
     by_design = {n: s / total for n, s in design_sum.items()}
     return total, by_label, by_design
+
+
+def derive_thp(refs):
+    """Rewrite a 24-reference 4 KB walk as the 15-reference 2 MB walk it implies.
+
+    A 2 MB mapping ends at the guest and host level-three entries, so the walk
+    keeps guest levels 1-3, host levels 1-3 of each, and the first three
+    h-final references, dropping everything indexed by a fourth level.
+
+    Levels one to three touch the same page-table lines whichever page size the
+    leaf uses, so their measured latencies carry over. What does not carry over
+    is cache pressure: the 4 KB run also walked a level-four table three orders
+    of magnitude larger, and the lines it evicted are charged to the levels
+    kept here. Simulating a capture whose page tables actually contain 2 MB
+    mappings is the way to remove that.
+    """
+    d = dict(zip(labels_for(4, 4), refs))
+    return [d[l] for l in labels_for(3, 3)]
 
 
 # ------------------------------------------------------------------------------
@@ -322,7 +346,7 @@ COLOR = False
 class G:
     """Glyphs, swapped for ASCII where the terminal cannot show them."""
     TL, TR, BL, BR, H, V = '/', '\\', '\\', '/', '-', '|'
-    BAR, DASH = '#', '-'
+    BAR, DASH, MARK = '#', '-', '>'
 
 
 def set_style(unicode_ok, color_ok):
@@ -330,7 +354,7 @@ def set_style(unicode_ok, color_ok):
     UNICODE, COLOR = unicode_ok, color_ok
     if unicode_ok:
         G.TL, G.TR, G.BL, G.BR, G.H, G.V = '╭', '╮', '╰', '╯', '─', '│'
-        G.BAR, G.DASH = '▇', '—'
+        G.BAR, G.DASH, G.MARK = '▇', '—', '▸'
 
 
 def c(text, *codes):
@@ -386,6 +410,17 @@ def bar(value, ceiling, width=14):
     return c(G.BAR * filled, CYAN) + ' ' * (width - filled)
 
 
+def highlight(name, width=20):
+    """Row label, marked when it is the design the paper is about.
+
+    The marker is a glyph rather than only bold, because a report redirected to
+    analysis_<config>.txt carries no colour and bold would vanish from it.
+    """
+    if name == OURS:
+        return c(f'{G.MARK} ', GREEN) + c(f'{name:<{width}}', BOLD)
+    return '  ' + f'{name:<{width}}'
+
+
 def infer_workload(path):
     """Results/<workload>/sim_arm.log, Data/<workload>/..., or sim_<w>.log."""
     parts = os.path.abspath(path).split(os.sep)
@@ -401,34 +436,32 @@ def infer_config(path):
     return m.group(1) if m else None
 
 
-def print_summary(path, total, range_hits, hfinal_share, walk, e2e, ref, tag):
-    section('Summary')
-    paper_h = sum(ref[f'hfinal_{tag}']) if ref and ref.get(f'hfinal_{tag}') else None
-    paper_w = ref[f'walk_{tag}'].get('SagePTE') if ref else None
-    paper_e = ref[f'e2e_{tag}'].get('SagePTE') if ref else None
+def print_summary(path, total, range_hits, headline):
+    """headline: list of (label, measured, paper, unit, fmt) already computed.
 
-    rows = [('h-final share of walk', f'{hfinal_share:>8.2f}%', paper_h,
-             f'{paper_h:.2f}%' if paper_h else None,
-             (hfinal_share - paper_h) if paper_h else None, 'pp'),
-            ('SagePTE page-walk', f'{walk:>8.2f}x', paper_w,
-             f'{paper_w:.2f}x' if paper_w else None,
-             pct_delta(walk, paper_w), '%'),
-            ('SagePTE end-to-end', f'{e2e:>8.3f}x', paper_e,
-             f'{paper_e:.3f}x' if paper_e else None,
-             pct_delta(e2e, paper_e), '%')]
-    for label, value, paper, paper_txt, delta, unit in rows:
-        line = f'  {c(f"{label:<24}", DIM)}{value}'
-        if paper:
-            line += f'   {c("paper", DIM)} {paper_txt:>8}  {fmt_delta(delta, unit)}'
+    A share is compared in percentage points, a speedup as a relative
+    difference, so the unit decides both the suffix and how the gap is taken.
+    """
+    section('Summary')
+    for label, value, paper, unit, fmt in headline:
+        suffix = '%' if unit == 'pp' else 'x'
+        line = f'  {c(f"{label:<26}", DIM)}{format(value, fmt) + suffix:>8}'
+        if paper is not None:
+            delta = (value - paper) if unit == 'pp' else pct_delta(value, paper)
+            line += (f'   {c("paper", DIM)} {format(paper, fmt) + suffix:>8}'
+                     f'  {fmt_delta(delta, unit)}')
         print(line)
     print()
-    field('page walks', f'{total:,}', 24)
-    field('DMT range coverage', f'{range_hits / total * 100:.2f}%', 24)
-    field('source', path, 24)
+    field('page walks', f'{total:,}', 26)
+    field('DMT range coverage', f'{range_hits / total * 100:.2f}%', 26)
+    field('source', path, 26)
 
 
-def print_walk_table(by_design, paper_walk):
-    section('Page-walk latency')
+def print_walk_table(by_design, paper_walk, pages, note=None):
+    section(f'Page-walk latency  ({pages})')
+    if note:
+        print(f'  {c(note, DIM)}')
+        print()
     npw = by_design['Nested paging (NPW)']
     speedups = {n: npw / by_design[n] for n in DESIGN_ORDER if n in by_design}
     ceiling = max(speedups.values())
@@ -440,8 +473,8 @@ def print_walk_table(by_design, paper_walk):
         if name not in by_design:
             continue
         speedup = speedups[name]
-        label = c(f'{name:<20}', BOLD) if name == 'SagePTE' else f'{name:<20}'
-        line = f'  {label}{by_design[name]:>9.2f}{speedup:>8.2f}x  {bar(speedup, ceiling)}'
+        line = (highlight(name) +
+                f'{by_design[name]:>9.2f}{speedup:>8.2f}x  {bar(speedup, ceiling)}')
         if paper_walk:
             if name.startswith('Nested'):
                 line += f'{"baseline":>18}'
@@ -457,8 +490,8 @@ def print_walk_table(by_design, paper_walk):
                   f'{c(" not modelled", DIM)}')
 
 
-def print_e2e_table(by_design, fraction, paper_e2e):
-    section('End-to-end speedup')
+def print_e2e_table(by_design, fraction, paper_e2e, pages):
+    section(f'End-to-end speedup  ({pages})')
     print(f'  {c("Eq. (4), with", DIM)} {fraction * 100:.2f}% '
           f'{c("of execution time spent walking page tables", DIM)}')
     print()
@@ -473,8 +506,8 @@ def print_e2e_table(by_design, fraction, paper_e2e):
         header += f'{"paper":>9}{"diff":>9}'
     print(c(header, DIM))
     for name, speedup, value in rows:
-        label = c(f'{name:<20}', BOLD) if name == 'SagePTE' else f'{name:<20}'
-        line = f'  {label}{speedup:>8.2f}x{value:>8.3f}x  {bar(value, ceiling)}'
+        line = (highlight(name) +
+                f'{speedup:>8.2f}x{value:>8.3f}x  {bar(value, ceiling)}')
         if paper_e2e:
             paper = paper_e2e.get(name)
             line += (f'{paper:>8.3f}x {fmt_delta(pct_delta(value, paper))}'
@@ -518,11 +551,10 @@ def print_composition(by_label, npw, g_levels, h_levels, paper_shares):
     print(line)
 
 
-def print_notes(by_design, paper_walk):
-    if not paper_walk:
-        return
+def outliers(by_design, paper_walk):
+    """Designs whose page-walk speedup missed the paper by more than the bar."""
     npw = by_design['Nested paging (NPW)']
-    far = []
+    out = []
     for name in DESIGN_ORDER:
         if name not in by_design or name.startswith('Nested'):
             continue
@@ -531,14 +563,27 @@ def print_notes(by_design, paper_walk):
             continue
         delta = pct_delta(npw / by_design[name], paper)
         if abs(delta) > CLOSE_ENOUGH:
-            far.append(f'{name} ({delta:+.1f}%)')
+            out.append(f'{name} ({delta:+.1f}%)')
+    return out
+
+
+def print_notes(shapes):
+    """shapes: list of (page size, by_design, paper_walk)."""
     section('Notes')
-    if far:
-        print(f'  {len(far)} designs differ from the paper by more than '
-              f'{CLOSE_ENOUGH:.0f}%:')
-        print(f'    {", ".join(far)}')
-    else:
-        print(f'  every design is within {CLOSE_ENOUGH:.0f}% of the paper')
+    for pages, by_design, paper_walk in shapes:
+        if not paper_walk:
+            continue
+        far = outliers(by_design, paper_walk)
+        if far:
+            print(f'  {pages}: differ from the paper by more than '
+                  f'{CLOSE_ENOUGH:.0f}%')
+            for line in textwrap.wrap(', '.join(far), width=WIDTH - 4,
+                                      initial_indent='    ',
+                                      subsequent_indent='    '):
+                print(line)
+        else:
+            print(f'  {pages}: every design is within {CLOSE_ENOUGH:.0f}% '
+                  f'of the paper')
 
 
 def analyze(path, workload=None, config=None, compare=True):
@@ -571,19 +616,58 @@ def analyze(path, workload=None, config=None, compare=True):
     fraction = ref.get(f'frac_{tag}') if ref else None
     e2e = end_to_end(walk_speedup, fraction) if fraction else float('nan')
 
+    # A 4 KB capture also yields the 2 MB walk it implies; see derive_thp().
+    thp = None
+    if is_4k:
+        _, thp_label, thp_design = tally(records, 3, 3, project=derive_thp)
+        thp_frac = ref.get('frac_thp') if ref else None
+        thp_walk = thp_design['Nested paging (NPW)'] / thp_design[OURS]
+        thp = (thp_label, thp_design, thp_frac, thp_walk)
+
+    headline = [('h-final share of walk', hfinal / npw * 100,
+                 sum(ref[f'hfinal_{tag}']) if ref and ref.get(f'hfinal_{tag}') else None,
+                 'pp', '.2f'),
+                (f'{OURS} page-walk, 4 KB' if thp else f'{OURS} page-walk',
+                 walk_speedup, ref[f'walk_{tag}'].get(OURS) if ref else None,
+                 '%', '.2f')]
+    if fraction:
+        headline.append((f'{OURS} end-to-end, 4 KB' if thp else f'{OURS} end-to-end',
+                         e2e, ref[f'e2e_{tag}'].get(OURS) if ref else None, '%', '.3f'))
+    if thp:
+        headline.append((f'{OURS} page-walk, 2 MB', thp[3],
+                         ref['walk_thp'].get(OURS) if ref else None, '%', '.2f'))
+        if thp[2]:
+            headline.append((f'{OURS} end-to-end, 2 MB',
+                             end_to_end(thp[3], thp[2]),
+                             ref['e2e_thp'].get(OURS) if ref else None, '%', '.3f'))
+
     subtitle = '   '.join(filter(None, [
         workload or 'unknown workload', config,
-        '4 KB pages' if is_4k else '2 MB pages (THP)']))
+        '4 KB and 2 MB pages' if thp else
+        ('4 KB pages' if is_4k else '2 MB pages (THP)')]))
     banner('SagePTE  --  page-walk analysis', subtitle)
-    print_summary(path, total, range_hits, hfinal / npw * 100,
-                  walk_speedup, e2e, ref, tag)
-    print_walk_table(by_design, ref.get(f'walk_{tag}') if ref else None)
+    print_summary(path, total, range_hits, headline)
+
+    pages = '4 KB pages' if is_4k else '2 MB pages'
+    print_walk_table(by_design, ref.get(f'walk_{tag}') if ref else None, pages)
     if fraction:
-        print_e2e_table(by_design, fraction, ref.get(f'e2e_{tag}'))
+        print_e2e_table(by_design, fraction, ref.get(f'e2e_{tag}'), pages)
+    if thp:
+        thp_label, thp_design, thp_frac, _ = thp
+        print_walk_table(thp_design, ref.get('walk_thp') if ref else None,
+                         '2 MB huge pages',
+                         note='the same walks with level four removed, '
+                              'where a 2 MB mapping ends')
+        if thp_frac:
+            print_e2e_table(thp_design, thp_frac, ref.get('e2e_thp') if ref else None,
+                            '2 MB huge pages')
     print_composition(by_label, npw, g_levels, h_levels,
                       ref.get(f'hfinal_{tag}') if ref else None)
     if ref:
-        print_notes(by_design, ref.get(f'walk_{tag}'))
+        shapes = [(pages, by_design, ref.get(f'walk_{tag}'))]
+        if thp:
+            shapes.append(('2 MB huge pages', thp[1], ref.get('walk_thp')))
+        print_notes(shapes)
     elif compare:
         section('Notes')
         print(f'  no paper reference for workload "{workload}"')
