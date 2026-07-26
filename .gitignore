@@ -82,3 +82,6 @@ drmemtrace.trace
 # Python bytecode caches
 __pycache__/
 *.pyc
+
+# YCSB run output
+Workloads/ycsb/results/

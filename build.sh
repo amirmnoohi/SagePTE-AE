@@ -130,7 +130,10 @@ readonly PKGS_KERNEL=(
   liblzma-dev libzstd-dev libcap-dev libnuma-dev libbabeltrace-ctf-dev libbfd-dev
   clang clang-format clang-tools llvm
 )
-readonly PKGS_WORKLOADS=(libreadline-dev)
+# memcached is the one workload that runs the distribution's server rather than
+# a binary built here, driven by the bundled YCSB client -- a Java program whose
+# launcher is a Python 2 script.
+readonly PKGS_WORKLOADS=(libreadline-dev memcached default-jre-headless python2)
 readonly PKGS_TOOLCHAIN=(gcc-7 g++-7)
 
 # One cheap probe per thing the build actually consumes. If every probe passes,

@@ -9,15 +9,22 @@
 # the load phase is done.  That generator is launched from post_start(), i.e.
 # after the server starts but before recording begins.
 #
-# The YCSB driver is not shipped with this artifact.  Point MEMCACHED_CLIENT at
-# an executable that loads the cache and then writes a timestamp to
-# READY_FILE:
+# The generator is memcached-client.sh, which drives the YCSB client bundled in
+# Workloads/ycsb with the same profile the DMT artifact used: 100 million 1 KB
+# records, read-only, uniformly distributed.  Point MEMCACHED_CLIENT at your own
+# executable to replace it; anything that fills the cache and then writes a
+# timestamp to READY_FILE will do.
 #
 #     MEMCACHED_CLIENT=/path/to/client.sh Tracer/run.sh memcached
+#
+# Unlike the other workloads this one runs the distribution's memcached rather
+# than a binary built here, so build.sh installs it along with a JRE and the
+# Python 2 the YCSB launcher is written for.
 
 DESCRIPTION="Memcached with an external YCSB load generator (~95 GB)"
 
-MEMCACHED_CLIENT="${MEMCACHED_CLIENT:-}"
+# Defaults to the bundled YCSB driver; override to use your own generator.
+MEMCACHED_CLIENT="${MEMCACHED_CLIENT:-${WORKLOAD_DIR}/memcached-client.sh}"
 
 BINARY="/usr/bin/memcached"
 ARGS="-u root -m 131000 -p 11211 -l 127.0.0.1"
