@@ -32,6 +32,16 @@ its internal name "Hyperlane"). Formulas are evaluated PER PATTERN and
 averaged weighted by frequency, exactly like Formula.cs's PullAverage —
 required because ASAP's prefetcher model uses max() and is nonlinear.
 
+The port has been checked against Formula.cs by evaluating both implementations
+over every pattern of a full Redis capture: Vanilla, ECPT, FPT, DMT, ASAP and
+Agile Paging agree exactly, in both the 4 KB and the 2 MB group. Where a design
+here differs from the paper, the formula is therefore not the cause.
+
+Two designs have no counterpart in that tool. SagePTE is this paper's, and TPT
+is reconstructed from its description in Section VI. Formula.cs also carries a
+pvDMT variant (the guest leaf and the last h-final reference, without the host
+lookup for the leaf) that the paper does not report, so it is not modelled.
+
 End-to-end speedup follows the paper's Eq. (4): a design that makes page walks
 s times faster, in a workload that spends a fraction f of its time walking,
 speeds the workload up by 1 / ((1 - f) + f / s). The fractions are measured on
