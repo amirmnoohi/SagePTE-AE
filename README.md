@@ -71,7 +71,7 @@ tools here.
 ## The pipeline
 
 <p align="center">
-  <img src="docs/pipeline.svg" alt="SagePTE artifact pipeline: stages 1 and 2 run in the guest VM, stage 3 on the KVM host, and the simulator consumes all three inputs" width="100%">
+  <img src="Docs/pipeline.svg" alt="SagePTE artifact pipeline: stages 1 and 2 run in the guest VM, stage 3 on the KVM host, and the simulator consumes all three inputs" width="100%">
 </p>
 
 The simulator needs **three** inputs: the memory trace, the guest page table

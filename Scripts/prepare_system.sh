@@ -5,7 +5,7 @@
 # ==============================================================================
 #
 #  SYNOPSIS
-#      scripts/prepare_system.sh [--check]
+#      Scripts/prepare_system.sh [--check]
 #
 #  DESCRIPTION
 #      Puts the machine into the state the measurements assume. Run it on both

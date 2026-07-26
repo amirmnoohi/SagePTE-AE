@@ -726,16 +726,16 @@ step_deps() {
 step_system() {
   ui::step "System"
 
-  local prep="${REPO_ROOT}/scripts/prepare_system.sh"
+  local prep="${REPO_ROOT}/Scripts/prepare_system.sh"
   if [[ ! -x "${prep}" ]]; then
-    ui::warn "scripts/prepare_system.sh is missing; skipping"
+    ui::warn "Scripts/prepare_system.sh is missing; skipping"
     record system skipped "script missing"
     return 0
   fi
 
   if (( EUID != 0 )) && ! have sudo; then
     ui::warn "cannot prepare the system: not root, and sudo is unavailable"
-    ui::note "run scripts/prepare_system.sh as root before capturing"
+    ui::note "run Scripts/prepare_system.sh as root before capturing"
     record system skipped "no privilege"
     return 0
   fi

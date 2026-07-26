@@ -225,7 +225,7 @@ push_host_code() {
 #   Reads REPO_ROOT, HOST, HOST_USER.
 #######################################
 ensure_prepared() {
-  local prep="${REPO_ROOT}/scripts/prepare_system.sh"
+  local prep="${REPO_ROOT}/Scripts/prepare_system.sh"
 
   # Unconditionally, on both machines, before anything is measured. Setting THP
   # is idempotent, but dropping the page cache is not: it has to happen every
@@ -238,7 +238,7 @@ ensure_prepared() {
       ui::ok "guest prepared  THP disabled, page cache dropped"
     else
       ui::warn "guest still reports transparent huge pages enabled"
-      ui::note "run scripts/prepare_system.sh as root here"
+      ui::note "run Scripts/prepare_system.sh as root here"
     fi
   fi
 
