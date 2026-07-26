@@ -5,7 +5,6 @@
 #
 # Usage: analyze_log.sh <sim log> [parse_walk_stats.py options]
 # e.g.:  analyze_log.sh Results/redis/sim_arm.log > Results/redis/analysis_arm.txt
-#        analyze_log.sh Results/redis/sim_arm.log --no-thp
 set -euo pipefail
 
 L="${1:?usage: analyze_log.sh <sim log> [options]}"

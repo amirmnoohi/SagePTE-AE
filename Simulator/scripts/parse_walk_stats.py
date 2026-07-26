@@ -3,7 +3,7 @@
 """
 Parse the "Page Walk Statistics" section of a simulator log (sim_arm.log /
 sim_x86.log), compute the average nested-page-walk latency for every evaluated
-design, project the end-to-end speedup each design implies, and compare all of
+design, derive the end-to-end speedup each design implies, and compare all of
 it against the values reported in the paper.
 
 Each histogram line records one unique page-walk pattern and its frequency:
@@ -45,7 +45,6 @@ Options:
     --workload NAME   workload to compare against (default: inferred from path)
     --config NAME     configuration label for the header (default: inferred)
     --no-compare      omit the paper columns; report measurements only
-    --no-thp          omit the projected THP section
 """
 
 import os
@@ -267,12 +266,10 @@ def parse_log(path):
     return records
 
 
-def tally(records, g_levels, h_levels, project=None):
+def tally(records, g_levels, h_levels):
     """Weighted averages for one walk shape.
 
     Returns (total_walks, {label: avg cycles}, {design: avg cycles}).
-    `project` optionally rewrites each record's reference list, which is how a
-    2 MB walk is derived from a 4 KB capture.
     """
     labels = labels_for(g_levels, h_levels)
     designs = formulas_for(g_levels, h_levels)
@@ -281,8 +278,7 @@ def tally(records, g_levels, h_levels, project=None):
     design_sum = {name: 0.0 for name in designs}
 
     for refs, _, count in records:
-        toks = project(refs) if project else refs
-        lat = [LATENCY[t] for t in toks]
+        lat = [LATENCY[t] for t in refs]
         for i, v in enumerate(lat):
             ref_sum[i] += v * count
         d = dict(zip(labels, lat))
@@ -293,26 +289,6 @@ def tally(records, g_levels, h_levels, project=None):
     by_label = {l: s / total for l, s in zip(labels, ref_sum)}
     by_design = {n: s / total for n, s in design_sum.items()}
     return total, by_label, by_design
-
-
-def project_4k_to_thp(refs):
-    """Derive a 15-reference 2 MB walk from a 24-reference 4 KB one.
-
-    A 2 MB mapping ends at the guest and host L3 entries, so the projection
-    keeps guest levels 1-3, host levels 1-3 of each, and the first three
-    h-final references, dropping everything indexed by a fourth level.
-
-    This is an estimate, not a measurement. It reuses the cache and
-    page-walk-cache behaviour observed with 4 KB mappings, whereas real huge
-    pages shrink the page table by three orders of magnitude and hit in those
-    structures far more often. Designs whose cost is dominated by the deep
-    levels (SagePTE, DMT) survive the approximation well; designs carrying a
-    fixed additive cost (ECPT) or reading every guest level (Agile Paging) do
-    not. Simulate a capture taken with huge pages enabled for a real number.
-    """
-    src = labels_for(4, 4)
-    d = dict(zip(src, refs))
-    return [d[l] for l in labels_for(3, 3)]
 
 
 # ------------------------------------------------------------------------------
@@ -392,10 +368,8 @@ def print_hfinal(by_label, npw, h_levels, paper_shares):
     print()
 
 
-def print_walk_table(title, by_design, paper_walk, note=None):
+def print_walk_table(title, by_design, paper_walk):
     print(title)
-    if note:
-        print(f'  {note}')
     npw = by_design['Nested paging (NPW)']
     compare = bool(paper_walk)
     head = f'  {"Design":<22}{"cycles":>10}{"speedup":>10}'
@@ -425,10 +399,8 @@ def print_walk_table(title, by_design, paper_walk, note=None):
     print()
 
 
-def print_e2e_table(title, by_design, fraction, paper_e2e, note=None):
+def print_e2e_table(title, by_design, fraction, paper_e2e):
     print(title)
-    if note:
-        print(f'  {note}')
     print(f'  page-walk fraction of execution time  f = {fraction * 100:.2f}%')
     npw = by_design['Nested paging (NPW)']
     compare = bool(paper_e2e)
@@ -450,7 +422,7 @@ def print_e2e_table(title, by_design, fraction, paper_e2e, note=None):
     print()
 
 
-def analyze(path, workload=None, config=None, compare=True, thp=True):
+def analyze(path, workload=None, config=None, compare=True):
     records = parse_log(path)
     if not records:
         print(f'{path}: no "Page Walk Statistics" records found')
@@ -488,20 +460,6 @@ def analyze(path, workload=None, config=None, compare=True, thp=True):
         print_e2e_table('END-TO-END SPEEDUP  (Eq. 4)', by_design,
                         ref[f'frac_{tag}'], ref.get(f'e2e_{tag}'))
 
-    # Projected huge-page results, when the capture used 4 KB pages.
-    if thp and is_4k:
-        _, thp_labels, thp_design = tally(records, 3, 3, project=project_4k_to_thp)
-        note = ('estimated from this 4 KB capture by dropping the fourth guest '
-                'and host level;\n  it reuses 4 KB cache behaviour, so treat it '
-                'as indicative — capture with\n  huge pages enabled for a '
-                'measured result')
-        print_walk_table('PAGE-WALK LATENCY  (2 MB pages, PROJECTED)',
-                         thp_design, ref.get('walk_thp') if ref else None,
-                         note=note)
-        if ref and ref.get('frac_thp'):
-            print_e2e_table('END-TO-END SPEEDUP  (2 MB pages, PROJECTED)',
-                            thp_design, ref['frac_thp'], ref.get('e2e_thp'))
-
     if compare and not ref:
         print(f'  (no paper reference for workload "{workload}"; '
               f'known: {", ".join(sorted(PAPER))})')
@@ -511,7 +469,7 @@ def analyze(path, workload=None, config=None, compare=True, thp=True):
 def main():
     args = sys.argv[1:]
     workload = config = None
-    compare = thp = True
+    compare = True
     paths = []
     while args:
         a = args.pop(0)
@@ -521,8 +479,6 @@ def main():
             config = args.pop(0)
         elif a == '--no-compare':
             compare = False
-        elif a == '--no-thp':
-            thp = False
         elif a in ('-h', '--help'):
             print(__doc__)
             return
@@ -532,7 +488,7 @@ def main():
         print(__doc__)
         sys.exit(1)
     for path in paths:
-        analyze(path, workload, config, compare, thp)
+        analyze(path, workload, config, compare)
 
 
 if __name__ == '__main__':
