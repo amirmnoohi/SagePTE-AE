@@ -103,7 +103,7 @@ ARCHES=()                # simulator configurations to run; default: x86
 readonly KNOWN_ARCHES=(arm x86)
 OUTPUT_DIR=""            # default: Data/<workload>
 FREEZE=1                 # 1 = hold the workload while its page table is read
-TRACE_TIMEOUT=7200       # seconds to wait for recording to start
+TRACE_STALL=1800         # seconds without progress before a capture is judged stuck
 
 # --force selects which stages to discard and redo. They are separate because
 # they cost wildly different amounts: re-capturing Redis means preloading a
@@ -298,8 +298,60 @@ state_field() {
 # Outputs:
 #   A short status string on stdout.
 #######################################
+#######################################
+# A signature of a capture's forward motion, for telling "still working" from
+# "wedged".
+#
+# Two independent signals, because either alone gives a false reading: a
+# workload that prints nothing while it allocates would look stalled by its
+# output, and one blocked on a futex still has its log sitting there unchanged.
+# Together they only agree when nothing at all is happening. Output is measured
+# in bytes rather than content because the workload's log is block-buffered and
+# the visible tail can repeat for a minute at a time while the file grows.
+# Globals:
+#   Reads OUTPUT_DIR, TRACER_PID.
+# Outputs:
+#   "<log bytes> <cpu ticks>", or empty when the tracer is gone.
+#######################################
+capture_signature() {
+  local log="${OUTPUT_DIR}/meta/tracer.log" bytes=0 ticks=0 pid value
+  [[ -f "${log}" ]] && bytes="$(stat -c %s "${log}" 2> /dev/null || echo 0)"
+  for pid in $(process_tree "${TRACER_PID}"); do
+    value="$(awk '{print $14 + $15}' "/proc/${pid}/stat" 2> /dev/null)"
+    ticks=$(( ticks + ${value:-0} ))
+  done
+  printf '%s %s' "${bytes}" "${ticks}"
+}
+
+#######################################
+# Every descendant of a pid, the tracer's own children included: the workload
+# runs several processes deep and only the leaves consume the CPU.
+# Arguments:
+#   $1 - pid to walk from.
+# Outputs:
+#   Whitespace-separated pids.
+#######################################
+process_tree() {
+  local pid="$1" child
+  for child in $(pgrep -P "${pid}" 2> /dev/null || true); do
+    printf '%s ' "${child}"
+    process_tree "${child}"
+  done
+}
+
 capture_progress() {
-  local pid rss
+  local pid rss published
+  # The tracer publishes the workload's own progress -- a percentage and an
+  # estimate where the workload reports one -- which beats anything derivable
+  # from outside the process.
+  local progress_file="${OUTPUT_DIR}/meta/progress.txt"
+  if [[ -r "${progress_file}" ]]; then
+    published="$(< "${progress_file}")"
+    if [[ -n "${published}" ]]; then
+      printf '%s' "${published}"
+      return 0
+    fi
+  fi
   if [[ -n "${APP_BINARY}" ]] && pid="$(pgrep -x "${APP_BINARY}" 2> /dev/null | head -1)" &&
     [[ -n "${pid}" ]]; then
     rss="$(sed -n 's/^VmRSS:[[:space:]]*\([0-9]*\) kB/\1/p' "/proc/${pid}/status" 2> /dev/null)"
@@ -649,7 +701,13 @@ else
   # first and only then signals readiness, so this is the long part of a
   # capture -- Redis preloads ~155 GB before it says it is ready.
   ui::wait_begin "waiting for recording to start"
-  deadline=$(( SECONDS + TRACE_TIMEOUT ))
+  # Judged on progress, not on elapsed time. How long a workload needs to build
+  # its working set is a property of the workload -- Redis preloads 155 GB in
+  # under two hours, graph500 runs eight passes over 4.3 billion edges and needs
+  # far longer -- so any fixed deadline is wrong for something. What a wedged
+  # run does have in common is that it stops moving.
+  stall_since=${SECONDS}
+  last_signature=""
   while :; do
     status="$(state_field STATUS "${STATE_FILE}")"
     [[ "${status}" == tracing ]] && break
@@ -657,10 +715,17 @@ else
       ui::wait_abort
       stage_failed "the tracer" "${TRACE_LOG}"
     fi
-    (( SECONDS < deadline )) || { ui::wait_abort
-      UI_EXIT_CODE=3 ui::die "recording did not start within $(ui::duration "${TRACE_TIMEOUT}")" \
-        "the workload never signalled readiness" \
-        "log: $(ui::relpath "${TRACE_LOG}" "${REPO_ROOT}")"; }
+    signature="$(capture_signature)"
+    if [[ "${signature}" != "${last_signature}" ]]; then
+      last_signature="${signature}"
+      stall_since=${SECONDS}
+    elif (( SECONDS - stall_since >= TRACE_STALL )); then
+      ui::wait_abort
+      UI_EXIT_CODE=3 ui::die \
+        "the capture has made no progress for $(ui::duration "${TRACE_STALL}")" \
+        "the workload has produced no output and used no CPU in that time" \
+        "log: $(ui::relpath "${TRACE_LOG}" "${REPO_ROOT}")"
+    fi
     ui::wait_sleep 2
     ui::wait_tick "$(capture_progress)"
   done

@@ -736,6 +736,9 @@ if [[ -n "${READY_FILE}" ]]; then
     sleep 1
     # readiness_label() sets READY_LABEL in this shell; see the note there.
     readiness_label
+    # Published so the pipeline driver can show the same figure; it runs in a
+    # different process and cannot call the workload's hook itself.
+    printf '%s\n' "${READY_LABEL}" > "${META_DIR}/progress.txt" 2>/dev/null || true
     ui::wait_tick "${READY_LABEL}"
   done
 
@@ -749,6 +752,7 @@ if [[ -n "${READY_FILE}" ]]; then
       "full output: $(ui::relpath "${TRACER_LOG}" "${REPO_ROOT}")" \
       "(a benchmark that cannot allocate its working set is the usual cause)"
   fi
+  rm -f "${META_DIR}/progress.txt" 2>/dev/null || true
   ui::wait_end "workload ready"
 else
   ui::wait_begin "no readiness signal defined — waiting ${READY_DELAY}s"
