@@ -53,7 +53,6 @@ Options:
 import os
 import re
 import sys
-import textwrap
 
 # Cycle cost of a page-walk reference served by each component (Constants).
 LATENCY = {
@@ -551,41 +550,6 @@ def print_composition(by_label, npw, g_levels, h_levels, paper_shares):
     print(line)
 
 
-def outliers(by_design, paper_walk):
-    """Designs whose page-walk speedup missed the paper by more than the bar."""
-    npw = by_design['Nested paging (NPW)']
-    out = []
-    for name in DESIGN_ORDER:
-        if name not in by_design or name.startswith('Nested'):
-            continue
-        paper = paper_walk.get(name)
-        if not paper:
-            continue
-        delta = pct_delta(npw / by_design[name], paper)
-        if abs(delta) > CLOSE_ENOUGH:
-            out.append(f'{name} ({delta:+.1f}%)')
-    return out
-
-
-def print_notes(shapes):
-    """shapes: list of (page size, by_design, paper_walk)."""
-    section('Notes')
-    for pages, by_design, paper_walk in shapes:
-        if not paper_walk:
-            continue
-        far = outliers(by_design, paper_walk)
-        if far:
-            print(f'  {pages}: differ from the paper by more than '
-                  f'{CLOSE_ENOUGH:.0f}%')
-            for line in textwrap.wrap(', '.join(far), width=WIDTH - 4,
-                                      initial_indent='    ',
-                                      subsequent_indent='    '):
-                print(line)
-        else:
-            print(f'  {pages}: every design is within {CLOSE_ENOUGH:.0f}% '
-                  f'of the paper')
-
-
 def analyze(path, workload=None, config=None, compare=True):
     records = parse_log(path)
     if not records:
@@ -663,15 +627,10 @@ def analyze(path, workload=None, config=None, compare=True):
                             '2 MB huge pages')
     print_composition(by_label, npw, g_levels, h_levels,
                       ref.get(f'hfinal_{tag}') if ref else None)
-    if ref:
-        shapes = [(pages, by_design, ref.get(f'walk_{tag}'))]
-        if thp:
-            shapes.append(('2 MB huge pages', thp[1], ref.get('walk_thp')))
-        print_notes(shapes)
-    elif compare:
-        section('Notes')
-        print(f'  no paper reference for workload "{workload}"')
-        print(f'  known workloads: {", ".join(sorted(PAPER))}')
+    if compare and not ref:
+        section('No reference data')
+        print(f'  no paper values for workload "{workload}"')
+        print(f'  {c("known workloads: " + ", ".join(sorted(PAPER)), DIM)}')
     print()
 
 
