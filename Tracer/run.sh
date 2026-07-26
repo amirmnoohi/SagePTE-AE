@@ -608,10 +608,20 @@ ui::step "Environment"
     "build it with:  cd ${SCRIPT_DIR} && ./build.sh"
 ui::ok "tracer  $(ui::relpath "${DRRUN}" "${REPO_ROOT}")"
 
-[[ -x "${APP_BIN}" ]] ||
-  UI_EXIT_CODE=2 ui::die "workload binary not found or not executable:" \
-    "${APP_BIN}" \
-    "build the benchmarks with:  cd ${WORKLOAD_DIR} && make"
+# A definition naming an absolute path wants a binary from the system, which
+# no amount of building here will produce; saying "run make" sends the reader
+# somewhere that cannot help.
+if [[ ! -x "${APP_BIN}" ]]; then
+  case "${BINARY}" in
+    /*) UI_EXIT_CODE=2 ui::die "workload binary not found or not executable:" \
+          "${APP_BIN}" \
+          "${WORKLOAD} runs a system binary, not one this repository builds" \
+          "install it with the package manager, then run again" ;;
+    *)  UI_EXIT_CODE=2 ui::die "workload binary not found or not executable:" \
+          "${APP_BIN}" \
+          "build the benchmarks with:  cd ${WORKLOAD_DIR} && make" ;;
+  esac
+fi
 ui::ok "binary  $(ui::relpath "${APP_BIN}" "${REPO_ROOT}")"
 
 # Datasets and helper programs the workload cannot run without. Checking here
